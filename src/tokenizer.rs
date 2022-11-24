@@ -1,73 +1,195 @@
+
 pub struct Token<'a> {
+    pub kind: TokenKind,
     pub range: &'a str,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TokenKind {
+    Assignment,
+    BraceClose,
+    BraceOpen,
+    Colon,
+    ColonColon,
+    Comma,
+    KwdLet,
+    KwdModule,
+    Identifier,
+    Number,
+    OpEquality,
+    ParenClose,
+    ParenOpen,
+    Plus,
+    SemiColon,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum TokenizingError {
+    UnexpectedEOF,
+    UnexpectedToken,
 }
 
 #[derive(Clone)]
 pub struct TokenIter<'a> {
-    remaining: core::str::Chars<'a>
+    remaining: core::str::Chars<'a>,
 }
 
 enum TokenizerState {
     Initial,
     MatchingIdentifier {
-        offset: usize,
         length: usize,
+    },
+    MatchingNumber {
+        length: usize,
+    },
+    MatchingPartial {
+        fallback: TokenKind,
+        terminals: &'static [(char, TokenKind)],
     },
 }
 
+fn simple_token_type(c: char) -> Option<TokenKind> {
+    match c {
+        '}' => Some(TokenKind::BraceClose),
+        '{' => Some(TokenKind::BraceOpen),
+        ',' => Some(TokenKind::Comma),
+        ')' => Some(TokenKind::ParenClose),
+        '(' => Some(TokenKind::ParenOpen),
+        '+' => Some(TokenKind::Plus),
+        ';' => Some(TokenKind::SemiColon),
+        _ => None
+    }
+}
+
+fn normalize_token_identifier(id: &str) -> TokenKind {
+    match id {
+        "let" => TokenKind::KwdLet,
+        "module" => TokenKind::KwdModule,
+        _ => TokenKind::Identifier,
+    }
+}
+
 impl<'a> Iterator for TokenIter<'a> {
-    type Item = Token<'a>;
+    type Item = Result<Token<'a>, TokenizingError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut state = TokenizerState::Initial;
-        let mut iter = self.remaining.clone().enumerate().peekable();
-        
-        let initial_iter = self.remaining.clone();
+        let mut iter = self.remaining.clone().peekable();
+        let mut token_range = self.remaining.clone();
 
         // Consume tokens
-        while let Some((i, c)) = iter.peek() {
+        while let Some(c) = iter.peek() {
             match state {
                 TokenizerState::Initial => match c {
                     ' ' | '\t' | '\n' | '\r' => {
-                        // Ignore
+                        // Ignore, but move the range ptr forward
+                        _ = token_range.next();
                     }
-                    'a'..='z' | 'A'..='Z' | '_' => {
+                    'a'..='z' | 'A'..='Z' | '_' | '$' => {
                         state = TokenizerState::MatchingIdentifier {
-                            offset: *i,
                             length: 1,
-                        }           
+                        }
+                    }
+                    '0'..='9' => {
+                        state = TokenizerState::MatchingNumber {
+                            length: 1,
+                        }
+                    }
+                    '=' => {
+                        state = TokenizerState::MatchingPartial {
+                            fallback: TokenKind::Assignment,
+                            terminals: &[('=', TokenKind::OpEquality)],
+                        }
+                    }
+                    ':' => {
+                        state = TokenizerState::MatchingPartial {
+                            fallback: TokenKind::Colon,
+                            terminals: &[(':', TokenKind::ColonColon)],
+                        }
                     }
                     _ => {
-                        // Error: unexpected token
-                        return None;
+                        if let Some(kind) = simple_token_type(*c) {
+                            state = TokenizerState::MatchingPartial {
+                                fallback: kind,
+                                terminals: &[],
+                            };
+                        } else {
+                            return Some(Err(TokenizingError::UnexpectedToken));
+                        }
                     }
-                }
-                TokenizerState::MatchingIdentifier { offset, length }=> match c {
+                },
+                TokenizerState::MatchingIdentifier { length } => match c {
                     'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => {
                         state = TokenizerState::MatchingIdentifier {
-                            offset: offset,
                             length: length + 1,
                         }
-                    },
+                    }
                     _ => {
                         break;
                     }
+                },
+                TokenizerState::MatchingNumber { length } => match c {
+                    '0'..='9' | '.' => {
+                        state = TokenizerState::MatchingNumber {
+                            length: length + 1,
+                        }
+                    }
+                    _ => {
+                        break;
+                    }
+                },
+                TokenizerState::MatchingPartial { .. } => {
+                    break;
                 }
             }
 
             _ = iter.next();
             _ = self.remaining.next();
-        };
+        }
 
         // Consolidate
         match state {
             TokenizerState::Initial => {
+                // EOF
                 None
+            }
+            TokenizerState::MatchingIdentifier { length } => {
+                let range = &token_range.as_str()[0..length];
+                Some(Ok(Token {
+                    kind: normalize_token_identifier(range),
+                    range,
+                }))
             },
-            TokenizerState::MatchingIdentifier { offset, length } => {
-                Some(Token {
-                    range: &initial_iter.as_str()[offset..offset+length],
-                })
+            TokenizerState::MatchingNumber { length } => {
+                Some(Ok(Token {
+                    kind: TokenKind::Number,
+                    range: &token_range.as_str()[0..length],
+                }))
+            },
+            TokenizerState::MatchingPartial {
+                fallback,
+                terminals,
+            } => {
+                for (expected_c, kind) in terminals {
+                    match iter.peek() {
+                        Some(next_c) if next_c == expected_c => {
+                            // Remember to increment our internal iterator for the additionally
+                            // consumed character
+                            _ = self.remaining.next();
+
+                            return Some(Ok(Token {
+                                kind: *kind,
+                                range: &token_range.as_str()[0..2],
+                            }));
+                        }
+                        _ => {}
+                    }
+                }
+
+                Some(Ok(Token {
+                    kind: fallback,
+                    range: &token_range.as_str()[0..1],
+                }))
             }
         }
     }
@@ -79,14 +201,12 @@ pub struct Scanner<'a> {
 
 impl<'a> Scanner<'a> {
     pub fn new(source: &'a str) -> Self {
-        Self {
-            source
-        }
+        Self { source }
     }
 
     pub fn iter(&self) -> TokenIter<'a> {
         TokenIter {
-            remaining: self.source.chars()
+            remaining: self.source.chars(),
         }
     }
 }
