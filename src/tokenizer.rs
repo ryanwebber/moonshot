@@ -7,7 +7,8 @@ pub struct Token<'a> {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TokenKind {
-    Arrow,
+    ArrowDouble,
+    ArrowSingle,
     Assignment,
     BraceClose,
     BraceOpen,
@@ -17,13 +18,15 @@ pub enum TokenKind {
     KwdLet,
     KwdGuard,
     KwdModule,
+    KwdProc,
     KwdYield,
     Identifier,
     Number,
+    OpAddition,
     OpEquality,
+    OpSubtraction,
     ParenClose,
     ParenOpen,
-    Plus,
     SemiColon,
 }
 
@@ -59,7 +62,7 @@ fn simple_token_type(c: char) -> Option<TokenKind> {
         ',' => Some(TokenKind::Comma),
         ')' => Some(TokenKind::ParenClose),
         '(' => Some(TokenKind::ParenOpen),
-        '+' => Some(TokenKind::Plus),
+        '+' => Some(TokenKind::OpAddition),
         ';' => Some(TokenKind::SemiColon),
         _ => None
     }
@@ -70,6 +73,7 @@ fn normalize_token_identifier(id: &str) -> TokenKind {
         "guard" => TokenKind::KwdGuard,
         "let" => TokenKind::KwdLet,
         "module" => TokenKind::KwdModule,
+        "proc" => TokenKind::KwdProc,
         "yield" => TokenKind::KwdYield,
         _ => TokenKind::Identifier,
     }
@@ -106,7 +110,15 @@ impl<'a> Iterator for TokenIter<'a> {
                             fallback: TokenKind::Assignment,
                             terminals: &[
                                 ('=', TokenKind::OpEquality),
-                                ('>', TokenKind::Arrow),
+                                ('>', TokenKind::ArrowDouble),
+                            ],
+                        }
+                    }
+                    '-' => {
+                        state = TokenizerState::MatchingPartial {
+                            fallback: TokenKind::OpSubtraction,
+                            terminals: &[
+                                ('>', TokenKind::ArrowSingle),
                             ],
                         }
                     }

@@ -4,14 +4,10 @@ pub mod tokenizer;
 
 fn main() {
     let rope = indoc::indoc! {"
-        (6 + ((2 1 1) + 0))
-    "};
-
-    let _ = indoc::indoc! {"
-        let a = guard x + 5 {
-            overflow => yield 0,
-            divByZero => yield 0,
-        };
+        proc main () -> () {
+            let x: i15 = (6 + ((2 + 5) + 0));
+            let x: i15 = 9;
+        }
     "};
 
     let scanner = tokenizer::Scanner::new(&rope);
@@ -19,7 +15,6 @@ fn main() {
     println!("==  Rope  ==");
     println!();
     println!("{}", rope);
-    println!();
 
     let tokenization: Result<Vec<_>, _> = scanner.iter().collect();
     let tokens = match tokenization {
@@ -44,11 +39,11 @@ fn main() {
     println!();
 
     let mut stream = parser::TokenStream::new(&tokens);
-    match parser::Parser::try_parse_expr(&mut stream) {
+    match parser::Parser::try_parse_proc(&mut stream) {
         Ok(ast) => {
             println!("== Parse ==");
             println!();
-            let tree: sexpr::Value<'_> = sexpr::IntoValue::into(&ast);
+            let tree = sexpr::IntoValue::into(&ast);
             println!("{}", tree);
             println!();
         }

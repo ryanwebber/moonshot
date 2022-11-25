@@ -1,9 +1,8 @@
 pub enum Value<'a> {
-    Cons(Box<Value<'a>>, Box<Value<'a>>),
     Nil,
     Number(&'a str),
     Symbol(&'a str),
-    Vector(Vec<Box<Value<'a>>>)
+    List(Vec<Value<'a>>)
 }
 
 pub struct Printer {
@@ -41,13 +40,6 @@ impl Printer {
 impl<'a> Display for Value<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>, p: &mut Printer) -> Result<(), std::fmt::Error> {
         match self {
-            Value::Cons(car, cdr) => {
-                p.open(f)?;
-                car.fmt(f, p)?;
-                p.space(f)?;
-                cdr.fmt(f, p)?;
-                p.close(f)?;
-            },
             Value::Nil => {
                 p.write(f, "nil")?;
             }
@@ -57,7 +49,7 @@ impl<'a> Display for Value<'a> {
             Value::Symbol(value) => {
                 p.write(f, value)?;
             }
-            Value::Vector(vec) => {
+            Value::List(vec) => {
                 p.open(f)?;
                 for (i, v) in vec.iter().enumerate() {
                     v.fmt(f, p)?;
