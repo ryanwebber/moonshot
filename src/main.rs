@@ -4,9 +4,11 @@ pub mod tokenizer;
 
 fn main() {
     let rope = indoc::indoc! {"
-        proc main () -> () {
-            let x: i15 = (6 + ((2 + 5) + 0));
-            let x: i15 = 9;
+        module _ {
+            proc main () -> () {
+                let x: i15 = (6 + ((2 + 5) + 0));
+                let x: i15 = 9;
+            }
         }
     "};
 
@@ -39,7 +41,7 @@ fn main() {
     println!();
 
     let mut stream = parser::TokenStream::new(&tokens);
-    match parser::Parser::try_parse_proc(&mut stream) {
+    match parser::Parser::try_parse_module(&mut stream) {
         Ok(ast) => {
             println!("== Parse ==");
             println!();

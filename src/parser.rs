@@ -17,7 +17,7 @@ pub struct Parse<'a> {
 
 pub struct Module<'a> {
     pub name: &'a str,
-    pub functions: Vec<Procedure<'a>>,
+    pub procs: Vec<Procedure<'a>>,
 }
 
 pub struct Procedure<'a> {
@@ -128,10 +128,7 @@ impl<'a> IntoValue<'a> for Statement<'a> {
         match self {
             Self::Definition { name, data_type, expression } => Value::List(vec![
                 Value::Symbol("defn"),
-                Value::List(vec![
-                    Value::Symbol("name"),
-                    Value::Symbol(name),
-                ]),
+                Value::Symbol(name),
                 IntoValue::into(data_type),
                 IntoValue::into(expression),
             ]),
@@ -141,26 +138,20 @@ impl<'a> IntoValue<'a> for Statement<'a> {
 
 impl<'a> IntoValue<'a> for DataType<'a> {
     fn into(&self) -> crate::sexpr::Value<'a> {
-        Value::List(vec![
-            Value::Symbol("type"),
-            Value::Symbol(self.name),
-        ])
+        Value::Symbol(self.name)
     }
 }
 
 impl<'a> IntoValue<'a> for Block<'a> {
     fn into(&self) -> crate::sexpr::Value<'a> {
-        Value::List(self.statements.iter().map(|s| IntoValue::into(s)).collect())
+        Value::List(self.statements.iter().map(IntoValue::into).collect())
     }
 }
 
 impl<'a> IntoValue<'a> for NamedElement<'a> {
     fn into(&self) -> crate::sexpr::Value<'a> {
         Value::List(vec![
-            Value::List(vec![
-                Value::Symbol("name"),
-                Value::Symbol(self.name),
-            ]),
+            Value::Symbol(self.name),
             IntoValue::into(&self.data_type)
         ])
     }
@@ -168,7 +159,7 @@ impl<'a> IntoValue<'a> for NamedElement<'a> {
 
 impl<'a> IntoValue<'a> for Tuple<'a> {
     fn into(&self) -> crate::sexpr::Value<'a> {
-        Value::List(self.elements.iter().map(|e| IntoValue::into(e)).collect())
+        Value::List(self.elements.iter().map(IntoValue::into).collect())
     }
 }
 
@@ -176,13 +167,20 @@ impl<'a> IntoValue<'a> for Procedure<'a> {
     fn into(&self) -> crate::sexpr::Value<'a> {
         Value::List(vec![
             Value::Symbol("proc"),
-            Value::List(vec![
-                Value::Symbol("name"),
-                Value::Symbol(self.name),
-            ]),
+            Value::Symbol(self.name),
             IntoValue::into(&self.input_tuple),
             IntoValue::into(&self.return_tuple),
             IntoValue::into(&self.block),
+        ])
+    }
+}
+
+impl<'a> IntoValue<'a> for Module<'a> {
+    fn into(&self) -> crate::sexpr::Value<'a> {
+        Value::List(vec![
+            Value::Symbol("module"),
+            Value::Symbol(self.name),
+            Value::List(self.procs.iter().map(IntoValue::into).collect())
         ])
     }
 }
@@ -409,7 +407,7 @@ impl Parser {
     pub fn try_parse_tuple<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Tuple<'a>> {
         stream.try_consume(TokenKind::ParenOpen, Required::No)?;
         let elements = Self::try_parse_zero_or_more(stream, Some(TokenKind::Comma), Self::try_parse_named_element)?;
-        stream.try_consume(TokenKind::ParenClose, Required::No)?;
+        stream.try_consume(TokenKind::ParenClose, Required::Yes)?;
         Ok(Tuple { elements: elements })
     }
 
@@ -430,5 +428,18 @@ impl Parser {
             })
         })
         .map_err(|op: SyntaxError<'a> | op.with_context(format!("While parsing function: {}", initial_stream.sample_source())))
+    }
+
+    pub fn try_parse_module<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Module<'a>> {
+        stream.try_consume(TokenKind::KwdModule, Required::No)?;
+        let mod_name = stream.try_consume(TokenKind::Identifier, Required::Yes)?;
+        stream.try_consume(TokenKind::BraceOpen, Required::Yes)?;
+        let procs = Self::try_parse_zero_or_more(stream, None, Self::try_parse_proc)?;
+        stream.try_consume(TokenKind::BraceClose, Required::Yes)?;
+
+        Ok(Module {
+            name: mod_name.range,
+            procs,
+        })
     }
 }
