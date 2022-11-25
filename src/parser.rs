@@ -55,10 +55,28 @@ pub struct DataType<'a> {
 pub struct Parser {
 }
 
-pub struct ParseError<'a> {
-    pub token: Option<&'a Token<'a>>,
-    pub description: String,
+pub struct Wanting<'a> {
+    pub position: Option<&'a Token<'a>>,
+    pub wanted: String,
 }
+
+pub enum PartialParseError {
+    Unmatched { wanted: String },
+    Unexpected { description: String },
+}
+
+pub struct SyntaxError<'a> {
+    pub kind: PartialParseError,
+    pub position: Option<&'a Token<'a>>,
+    pub context: Vec<String>,
+}
+
+#[derive(PartialEq)]
+pub enum Required {
+    Yes, No
+}
+
+pub type PartialParse<'a, Node> = Result<Node, SyntaxError<'a>>;
 
 #[derive(Clone)]
 pub struct TokenStream<'a> {
@@ -90,45 +108,147 @@ impl<'a> IntoValue<'a> for Expression<'a> {
     }
 }
 
+impl<'a> SyntaxError<'a> {
+    fn with_context(mut self, ctx: String) -> SyntaxError<'a> {
+        self.context.push(ctx);
+        self
+    }
+}
+
+impl<'a> std::fmt::Display for SyntaxError<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+
+        match &self.position {
+            Some(token) => {
+                writeln!(f, "At: {}", token.range)?;
+            },
+            None => {
+                writeln!(f, "At: <end of source>")?;
+            }
+        }
+
+        match &self.kind {
+            PartialParseError::Unmatched { wanted } => {
+                writeln!(f, "Expected: {}", wanted)?;
+            }
+            PartialParseError::Unexpected { description } => {
+                writeln!(f, "{}", description)?;
+            }
+        };
+
+        for (i, ctx) in self.context.iter().enumerate().take(10) {
+            write!(f, "  {: <1$}", "", i)?;
+            writeln!(f, "{}", ctx)?;
+        }
+
+        Ok(())
+    }
+}
+
 impl<'a> TokenStream<'a> {
     pub fn new(tokens: &'a [Token<'a>]) -> TokenStream<'a> {
         TokenStream {
             iter: tokens.iter()
         }
     }
+
+    fn peek(&self) -> Option<&'a Token<'a>> {
+        match self.iter.clone().next() {
+            Some(t) => Some(t),
+            None => None
+        }
+    }
+
+    fn sample_source(&self) -> String {
+        match self.iter.clone().next() {
+            Some(token) => {
+                token.rest.chars()
+                    .take(24)
+                    .take_while(|c| *c != '\r' && *c != '\n')
+                    .collect()
+            },
+            None => String::from("<^Z>")
+        }
+    }
     
-    fn try_consume(&mut self, expected: TokenKind) -> Result<&'a Token<'a>, ParseError<'a>> {
-        match self.iter.next() {
-            Some(token) if token.kind == expected => Ok(token),
-            Some(token) => Err(ParseError {
-                token: Some(token),
-                description: format!("Expected: {:?} Found: {:?}", expected, token.kind),
-            }),
-            _ => Err(ParseError {
-                token: None,
-                description: String::from("Unexpected end of source"),
+    fn try_consume(&mut self, expected: TokenKind, required: Required) -> Result<&'a Token<'a>, SyntaxError<'a>> {
+        let mut iter_clone = self.iter.clone();
+        match iter_clone.next() {
+            Some(token) if token.kind == expected => {
+                _ = self.iter.next();
+                Ok(token)
+            },
+            Some(token) => {
+                if required == Required::Yes {
+                    Err(SyntaxError {
+                        kind: PartialParseError::Unexpected {
+                            description: format!("Expected: {:?}, but found: {}", expected, token.range),
+                        },
+                        position: Some(token),
+                        context: vec!(),
+                    })
+                } else {
+                    Err(SyntaxError {
+                        kind: PartialParseError::Unmatched {
+                            wanted: format!("{:?}", expected),
+                        },
+                        position: Some(token),
+                        context: vec!(),
+                    })
+                }
+            },
+            _ => Err(SyntaxError {
+                kind: PartialParseError::Unexpected {
+                    description: format!("Expected: {:?}, but reached the end of source", expected),
+                },
+                position: None,
+                context: vec!(),
             })
         }
     }
 }
 
 impl Parser {
-    pub fn new() -> Parser {
-        Parser {  }
-    }
-
-   pub fn try_parse_expr<'a>(&self, stream: &mut TokenStream<'a>) -> Result<Expression<'a>, ParseError<'a>> {
-        let lhs = stream.try_consume(TokenKind::Number)?;
-        stream.try_consume(TokenKind::Plus)?;
-        let rhs = stream.try_consume(TokenKind::Number)?;
+    fn try_parse_binary_op_expr<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Expression<'a>> {
+        stream.try_consume(TokenKind::ParenOpen, Required::No)?;
+        let lhs = Self::try_parse_expr(stream)?;
+        stream.try_consume(TokenKind::Plus, Required::Yes)?;
+        let rhs = Self::try_parse_expr(stream)?;
+        stream.try_consume(TokenKind::ParenClose, Required::Yes)?;
         Ok(Expression::BinOpExpression {
-            lhs: Box::new(Expression::NumberLiteralExpression { value: lhs.range }),
+            lhs: Box::new(lhs),
             op: Operator::Addition,
-            rhs: Box::new(Expression::NumberLiteralExpression { value: rhs.range }),
+            rhs: Box::new(rhs),
         })
     }
 
-    pub fn try_parse<'a>(&self, _tokens: &'a [Token<'a>]) -> Result<Parse<'a>, ParseError<'a>> {
-        todo!()
+    fn try_parse_numeric_literal_expr<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Expression<'a>> {
+        let num_token = stream.try_consume(TokenKind::Number, Required::No)?;
+        Ok(Expression::NumberLiteralExpression {
+            value: num_token.range
+        })
+    }
+
+    pub fn try_parse_expr<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Expression<'a>> {
+        let initial_stream = stream.clone();
+        let parsers = [
+            Self::try_parse_binary_op_expr,
+            Self::try_parse_numeric_literal_expr,
+        ];
+
+        parsers.iter()
+            .map(|&p| p(stream)
+                .map_err(|op| op.with_context(format!("While parsing expression: {}", initial_stream.sample_source()))))
+            .find(|r| match r {
+                Err(SyntaxError { kind: PartialParseError::Unmatched { .. }, .. }) => false,
+                _ => true
+            })
+            .unwrap_or(Err(SyntaxError {
+                kind: PartialParseError::Unmatched {
+                    wanted: format!("expression")
+                },
+                position: stream.peek(),
+                context: vec!(format!("While parsing expression"))
+            }))
     }
 }

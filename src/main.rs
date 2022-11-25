@@ -4,7 +4,14 @@ pub mod tokenizer;
 
 fn main() {
     let rope = indoc::indoc! {"
-        6 + 0
+        (6 + ((2 1 1) + 0))
+    "};
+
+    let _ = indoc::indoc! {"
+        let a = guard x + 5 {
+            overflow => yield 0,
+            divByZero => yield 0,
+        };
     "};
 
     let scanner = tokenizer::Scanner::new(&rope);
@@ -28,7 +35,7 @@ fn main() {
         Err(err) => {
             println!("== Errors ==");
             println!();
-            println!("Tokenization error: {:#?}", err);
+            println!("[Tokenization Error]: {:#?}", err);
             println!();
             return;
         }
@@ -37,18 +44,18 @@ fn main() {
     println!();
 
     let mut stream = parser::TokenStream::new(&tokens);
-    let parser = parser::Parser::new();
-    match parser.try_parse_expr(&mut stream) {
+    match parser::Parser::try_parse_expr(&mut stream) {
         Ok(ast) => {
             println!("== Parse ==");
             println!();
             let tree: sexpr::Value<'_> = sexpr::IntoValue::into(&ast);
             println!("{}", tree);
+            println!();
         }
         Err(err) => {
             println!("== Errors ==");
             println!();
-            println!("Parse error: {}", err.description);
+            println!("{}", err);
             println!();
             return;
         }

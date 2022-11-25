@@ -2,10 +2,12 @@
 pub struct Token<'a> {
     pub kind: TokenKind,
     pub range: &'a str,
+    pub rest: &'a str,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TokenKind {
+    Arrow,
     Assignment,
     BraceClose,
     BraceOpen,
@@ -13,7 +15,9 @@ pub enum TokenKind {
     ColonColon,
     Comma,
     KwdLet,
+    KwdGuard,
     KwdModule,
+    KwdYield,
     Identifier,
     Number,
     OpEquality,
@@ -63,8 +67,10 @@ fn simple_token_type(c: char) -> Option<TokenKind> {
 
 fn normalize_token_identifier(id: &str) -> TokenKind {
     match id {
+        "guard" => TokenKind::KwdGuard,
         "let" => TokenKind::KwdLet,
         "module" => TokenKind::KwdModule,
+        "yield" => TokenKind::KwdYield,
         _ => TokenKind::Identifier,
     }
 }
@@ -75,7 +81,7 @@ impl<'a> Iterator for TokenIter<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         let mut state = TokenizerState::Initial;
         let mut iter = self.remaining.clone().peekable();
-        let mut token_range = self.remaining.clone();
+        let mut rest = self.remaining.clone();
 
         // Consume tokens
         while let Some(c) = iter.peek() {
@@ -83,7 +89,7 @@ impl<'a> Iterator for TokenIter<'a> {
                 TokenizerState::Initial => match c {
                     ' ' | '\t' | '\n' | '\r' => {
                         // Ignore, but move the range ptr forward
-                        _ = token_range.next();
+                        _ = rest.next();
                     }
                     'a'..='z' | 'A'..='Z' | '_' | '$' => {
                         state = TokenizerState::MatchingIdentifier {
@@ -98,7 +104,10 @@ impl<'a> Iterator for TokenIter<'a> {
                     '=' => {
                         state = TokenizerState::MatchingPartial {
                             fallback: TokenKind::Assignment,
-                            terminals: &[('=', TokenKind::OpEquality)],
+                            terminals: &[
+                                ('=', TokenKind::OpEquality),
+                                ('>', TokenKind::Arrow),
+                            ],
                         }
                     }
                     ':' => {
@@ -154,16 +163,18 @@ impl<'a> Iterator for TokenIter<'a> {
                 None
             }
             TokenizerState::MatchingIdentifier { length } => {
-                let range = &token_range.as_str()[0..length];
+                let range = &rest.as_str()[0..length];
                 Some(Ok(Token {
                     kind: normalize_token_identifier(range),
+                    rest: &rest.as_str(),
                     range,
                 }))
             },
             TokenizerState::MatchingNumber { length } => {
                 Some(Ok(Token {
                     kind: TokenKind::Number,
-                    range: &token_range.as_str()[0..length],
+                    rest: &rest.as_str(),
+                    range: &rest.as_str()[0..length],
                 }))
             },
             TokenizerState::MatchingPartial {
@@ -179,7 +190,8 @@ impl<'a> Iterator for TokenIter<'a> {
 
                             return Some(Ok(Token {
                                 kind: *kind,
-                                range: &token_range.as_str()[0..2],
+                                rest: &rest.as_str(),
+                                range: &rest.as_str()[0..2],
                             }));
                         }
                         _ => {}
@@ -188,7 +200,8 @@ impl<'a> Iterator for TokenIter<'a> {
 
                 Some(Ok(Token {
                     kind: fallback,
-                    range: &token_range.as_str()[0..1],
+                    rest: &rest.as_str(),
+                    range: &rest.as_str()[0..1],
                 }))
             }
         }

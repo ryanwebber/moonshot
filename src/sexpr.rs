@@ -77,9 +77,7 @@ impl<'a> std::fmt::Display for Value<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut p = Printer {};
         
-        p.open(f)?;
         Display::fmt(self, f, &mut p)?;
-        p.close(f)?;
         Ok(())
     }
 }
