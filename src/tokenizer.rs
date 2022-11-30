@@ -1,4 +1,4 @@
-
+#[derive(Debug)]
 pub struct Token<'a> {
     pub kind: TokenKind,
     pub range: &'a str,
@@ -13,10 +13,11 @@ pub enum TokenKind {
     BraceClose,
     BraceOpen,
     Colon,
-    ColonColon,
     Comma,
-    KwdLet,
+    KwdFrom,
     KwdGuard,
+    KwdImport,
+    KwdLet,
     KwdModule,
     KwdProc,
     KwdYield,
@@ -28,6 +29,7 @@ pub enum TokenKind {
     ParenClose,
     ParenOpen,
     SemiColon,
+    StringLiteral,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -53,29 +55,65 @@ enum TokenizerState {
         fallback: TokenKind,
         terminals: &'static [(char, TokenKind)],
     },
+    MatchingString {
+        length: usize,
+    },
 }
 
 fn simple_token_type(c: char) -> Option<TokenKind> {
     match c {
         '}' => Some(TokenKind::BraceClose),
         '{' => Some(TokenKind::BraceOpen),
+        ':' => Some(TokenKind::Colon),
         ',' => Some(TokenKind::Comma),
         ')' => Some(TokenKind::ParenClose),
         '(' => Some(TokenKind::ParenOpen),
         '+' => Some(TokenKind::OpAddition),
         ';' => Some(TokenKind::SemiColon),
-        _ => None
+        _ => None,
     }
 }
 
 fn normalize_token_identifier(id: &str) -> TokenKind {
     match id {
+        "from" => TokenKind::KwdFrom,
         "guard" => TokenKind::KwdGuard,
+        "import" => TokenKind::KwdImport,
         "let" => TokenKind::KwdLet,
         "module" => TokenKind::KwdModule,
         "proc" => TokenKind::KwdProc,
         "yield" => TokenKind::KwdYield,
         _ => TokenKind::Identifier,
+    }
+}
+
+impl<'a> std::fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ArrowDouble => write!(f, "=>"),
+            Self::ArrowSingle => write!(f, "->"),
+            Self::Assignment => write!(f, "="),
+            Self::BraceClose => write!(f, "}}"),
+            Self::BraceOpen => write!(f, "{{"),
+            Self::Colon => write!(f, ":"),
+            Self::Comma => write!(f, ","),
+            Self::KwdFrom => write!(f, "from"),
+            Self::KwdGuard => write!(f, "guard"),
+            Self::KwdImport => write!(f, "import"),
+            Self::KwdLet => write!(f, "let"),
+            Self::KwdModule => write!(f, "module"),
+            Self::KwdProc => write!(f, "proc"),
+            Self::KwdYield => write!(f, "yield"),
+            Self::Identifier => write!(f, "identifier"),
+            Self::Number => write!(f, "number"),
+            Self::OpAddition => write!(f, "+"),
+            Self::OpEquality => write!(f, "=="),
+            Self::OpSubtraction => write!(f, "-"),
+            Self::ParenClose => write!(f, ")"),
+            Self::ParenOpen => write!(f, "("),
+            Self::SemiColon => write!(f, ";"),
+            Self::StringLiteral => write!(f, "string literal"),
+        }
     }
 }
 
@@ -96,15 +134,9 @@ impl<'a> Iterator for TokenIter<'a> {
                         _ = rest.next();
                     }
                     'a'..='z' | 'A'..='Z' | '_' | '$' => {
-                        state = TokenizerState::MatchingIdentifier {
-                            length: 1,
-                        }
+                        state = TokenizerState::MatchingIdentifier { length: 1 }
                     }
-                    '0'..='9' => {
-                        state = TokenizerState::MatchingNumber {
-                            length: 1,
-                        }
-                    }
+                    '0'..='9' => state = TokenizerState::MatchingNumber { length: 1 },
                     '=' => {
                         state = TokenizerState::MatchingPartial {
                             fallback: TokenKind::Assignment,
@@ -117,17 +149,10 @@ impl<'a> Iterator for TokenIter<'a> {
                     '-' => {
                         state = TokenizerState::MatchingPartial {
                             fallback: TokenKind::OpSubtraction,
-                            terminals: &[
-                                ('>', TokenKind::ArrowSingle),
-                            ],
+                            terminals: &[('>', TokenKind::ArrowSingle)],
                         }
                     }
-                    ':' => {
-                        state = TokenizerState::MatchingPartial {
-                            fallback: TokenKind::Colon,
-                            terminals: &[(':', TokenKind::ColonColon)],
-                        }
-                    }
+                    '"' => state = TokenizerState::MatchingString { length: 1 },
                     _ => {
                         if let Some(kind) = simple_token_type(*c) {
                             state = TokenizerState::MatchingPartial {
@@ -141,9 +166,7 @@ impl<'a> Iterator for TokenIter<'a> {
                 },
                 TokenizerState::MatchingIdentifier { length } => match c {
                     'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => {
-                        state = TokenizerState::MatchingIdentifier {
-                            length: length + 1,
-                        }
+                        state = TokenizerState::MatchingIdentifier { length: length + 1 }
                     }
                     _ => {
                         break;
@@ -151,9 +174,7 @@ impl<'a> Iterator for TokenIter<'a> {
                 },
                 TokenizerState::MatchingNumber { length } => match c {
                     '0'..='9' | '.' => {
-                        state = TokenizerState::MatchingNumber {
-                            length: length + 1,
-                        }
+                        state = TokenizerState::MatchingNumber { length: length + 1 }
                     }
                     _ => {
                         break;
@@ -162,6 +183,15 @@ impl<'a> Iterator for TokenIter<'a> {
                 TokenizerState::MatchingPartial { .. } => {
                     break;
                 }
+                TokenizerState::MatchingString { length } => match c {
+                    '"' => {
+                        _ = iter.next();
+                        _ = self.remaining.next();
+                        state = TokenizerState::MatchingString { length: length + 1 };
+                        break;
+                    }
+                    _ => state = TokenizerState::MatchingString { length: length + 1 },
+                },
             }
 
             _ = iter.next();
@@ -181,14 +211,12 @@ impl<'a> Iterator for TokenIter<'a> {
                     rest: &rest.as_str(),
                     range,
                 }))
-            },
-            TokenizerState::MatchingNumber { length } => {
-                Some(Ok(Token {
-                    kind: TokenKind::Number,
-                    rest: &rest.as_str(),
-                    range: &rest.as_str()[0..length],
-                }))
-            },
+            }
+            TokenizerState::MatchingNumber { length } => Some(Ok(Token {
+                kind: TokenKind::Number,
+                rest: &rest.as_str(),
+                range: &rest.as_str()[0..length],
+            })),
             TokenizerState::MatchingPartial {
                 fallback,
                 terminals,
@@ -216,8 +244,20 @@ impl<'a> Iterator for TokenIter<'a> {
                     range: &rest.as_str()[0..1],
                 }))
             }
+            TokenizerState::MatchingString { length } => Some(Ok(Token {
+                kind: TokenKind::StringLiteral,
+                rest: &rest.as_str(),
+                range: &rest.as_str()[0..length],
+            })),
         }
     }
+}
+
+pub struct StringNormalizer;
+
+#[derive(Debug)]
+pub enum StringNormalizationError {
+    UnexpectedStringFormat(String),
 }
 
 pub struct Scanner<'a> {
@@ -232,6 +272,26 @@ impl<'a> Scanner<'a> {
     pub fn iter(&self) -> TokenIter<'a> {
         TokenIter {
             remaining: self.source.chars(),
+        }
+    }
+}
+
+impl StringNormalizer {
+    pub fn extract_and_unescape(s: &str) -> Result<String, StringNormalizationError> {
+        if s.len() < 2 {
+            Err(StringNormalizationError::UnexpectedStringFormat(
+                String::from("Expected string to be at least two (2) characters long"),
+            ))
+        } else {
+            Ok(s[1..s.len() - 1].to_string())
+        }
+    }
+}
+
+impl ToString for StringNormalizationError {
+    fn to_string(&self) -> String {
+        match self {
+            StringNormalizationError::UnexpectedStringFormat(s) => s.clone(),
         }
     }
 }

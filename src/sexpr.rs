@@ -1,19 +1,19 @@
-pub enum Value<'a> {
+pub enum Value {
+    List(Vec<Value>),
     Nil,
-    Number(&'a str),
-    Symbol(&'a str),
-    List(Vec<Value<'a>>)
+    Number(String),
+    Symbol(String),
+    String(String),
 }
 
-pub struct Printer {
-}
+pub struct Printer {}
 
 pub trait Display {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>, p: &mut Printer) -> Result<(), std::fmt::Error>;
 }
 
-pub trait IntoValue<'a> {
-    fn into(&self) -> Value<'a>;
+pub trait IntoValue {
+    fn into(&self) -> Value;
 }
 
 impl Printer {
@@ -31,24 +31,11 @@ impl Printer {
         write!(f, " ")?;
         Ok(())
     }
-
-    fn write(&mut self, f: &mut std::fmt::Formatter<'_>, s: &str) -> Result<(), std::fmt::Error> {
-        write!(f, "{}", s)
-    }
 }
 
-impl<'a> Display for Value<'a> {
+impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>, p: &mut Printer) -> Result<(), std::fmt::Error> {
-        match self {
-            Value::Nil => {
-                p.write(f, "nil")?;
-            }
-            Value::Number(value) => {
-                p.write(f, value)?;
-            }
-            Value::Symbol(value) => {
-                p.write(f, value)?;
-            }
+        match &self {
             Value::List(vec) => {
                 p.open(f)?;
                 for (i, v) in vec.iter().enumerate() {
@@ -59,16 +46,28 @@ impl<'a> Display for Value<'a> {
                 }
                 p.close(f)?;
             }
+            Value::Nil => {
+                write!(f, "nil")?;
+            }
+            Value::Number(value) => {
+                write!(f, "{}", value)?;
+            }
+            Value::String(value) => {
+                write!(f, "\"{}\"", value)?;
+            }
+            Value::Symbol(value) => {
+                write!(f, "{}", value)?;
+            }
         };
 
         Ok(())
     }
 }
 
-impl<'a> std::fmt::Display for Value<'a> {
+impl<'a> std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut p = Printer {};
-        
+
         Display::fmt(self, f, &mut p)?;
         Ok(())
     }
