@@ -213,6 +213,30 @@ impl Parser {
         })
     }
 
+    fn try_parse_var_access<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Expression<'a>> {
+        let base_identifier = stream.try_consume(TokenKind::Identifier, Required::No)?;
+        let mut path: Vec<&'a str> = vec![base_identifier.range];
+
+        loop {
+            match stream.peek() {
+                Some(t) if t.kind == TokenKind::Dot => {
+                    let next_identifier =
+                        stream.try_consume(TokenKind::Identifier, Required::Yes)?;
+                    path.push(next_identifier.range);
+                }
+                _ => {
+                    break;
+                }
+            };
+        }
+
+        if path.len() == 1 {
+            path.push("_")
+        }
+
+        Ok(Expression::VarAccess { path })
+    }
+
     fn try_parse_numeric_literal_expr<'a>(
         stream: &mut TokenStream<'a>,
     ) -> PartialParse<'a, Expression<'a>> {
@@ -227,6 +251,7 @@ impl Parser {
         let parsers = [
             Self::try_parse_binary_op_expr,
             Self::try_parse_numeric_literal_expr,
+            Self::try_parse_var_access,
         ];
 
         parsers
@@ -311,7 +336,9 @@ impl Parser {
         })
     }
 
-    pub fn try_parse_type_container<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, TypeContainer<'a>> {
+    pub fn try_parse_type_container<'a>(
+        stream: &mut TokenStream<'a>,
+    ) -> PartialParse<'a, TypeContainer<'a>> {
         match stream.try_consume(TokenKind::ParenOpen, Required::No) {
             Ok(..) => {
                 let elements = Self::try_parse_zero_or_more(
@@ -321,16 +348,19 @@ impl Parser {
                 )?;
                 stream.try_consume(TokenKind::ParenClose, Required::Yes)?;
                 Ok(TypeContainer { elements: elements })
-            },
-            Err(SyntaxError { kind: PartialParseError::Unmatched { .. }, .. }) => {
+            }
+            Err(SyntaxError {
+                kind: PartialParseError::Unmatched { .. },
+                ..
+            }) => {
                 let data_type = Self::try_parse_data_type(stream)?;
                 Ok(TypeContainer {
-                    elements: vec![NamedElement{
+                    elements: vec![NamedElement {
                         name: "_",
                         data_type,
-                    }]
+                    }],
                 })
-            },
+            }
             Err(e) => Err(e),
         }
     }

@@ -1,3 +1,5 @@
+use std::fmt::write;
+
 use crate::sexpr;
 
 pub enum Instruction {
@@ -28,8 +30,15 @@ pub struct AddExpr {
 }
 
 pub struct ConstExpr {
-    pub mode: DataMode,
-    pub value: String,
+    pub value: ConstValue,
+}
+
+pub enum ConstValue {
+    Float { data: f32, precision: Precision },
+}
+
+pub enum Precision {
+    Single,
 }
 
 #[derive(Debug)]
@@ -37,70 +46,75 @@ pub enum DataMode {
     SP1,
 }
 
-impl sexpr::IntoValue for Instruction {
-    fn into(&self) -> sexpr::Value {
+impl std::fmt::Display for DataMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Set(lval, rval) => {
-                sexpr::Value::List(vec![
-                    sexpr::Value::Symbol(String::from("set")),
-                    sexpr::IntoValue::into(lval),
-                    sexpr::IntoValue::into(rval),
-                ])
-            }
+            Self::SP1 => write!(f, "SP1"),
         }
     }
 }
 
-impl sexpr::IntoValue for LVal {
-    fn into(&self) -> sexpr::Value {
-        match self {
-            Self::Reg(expr) => {
-                sexpr::IntoValue::into(expr)
-            }
+impl From<&Instruction> for sexpr::Value {
+    fn from(v: &Instruction) -> Self {
+        match v {
+            Instruction::Set(lval, rval) => sexpr::Value::List(vec![
+                sexpr::Value::Symbol(String::from("set")),
+                sexpr::Value::from(lval),
+                sexpr::Value::from(rval),
+            ]),
         }
     }
 }
 
-impl sexpr::IntoValue for RVal {
-    fn into(&self) -> sexpr::Value {
-        match self {
-            Self::Add(expr) => {
-                sexpr::IntoValue::into(expr)
-            },
-            Self::Const(expr) => {
-                sexpr::IntoValue::into(expr)
-            },
-            Self::Reg(expr) => {
-                sexpr::IntoValue::into(expr)
-            },
+impl From<&LVal> for sexpr::Value {
+    fn from(v: &LVal) -> Self {
+        match v {
+            LVal::Reg(expr) => sexpr::Value::from(expr),
         }
     }
 }
 
-impl sexpr::IntoValue for RegExpr {
-    fn into(&self) -> sexpr::Value {
+impl From<&RVal> for sexpr::Value {
+    fn from(v: &RVal) -> Self {
+        match v {
+            RVal::Add(expr) => sexpr::Value::from(expr),
+            RVal::Const(expr) => sexpr::Value::from(expr),
+            RVal::Reg(expr) => sexpr::Value::from(expr),
+        }
+    }
+}
+
+impl From<&RegExpr> for sexpr::Value {
+    fn from(v: &RegExpr) -> Self {
         sexpr::Value::List(vec![
-            sexpr::Value::Symbol(format!("reg:{:?}", self.mode)),
-            sexpr::Value::Number(format!("{}", self.reg.0)),
+            sexpr::Value::Symbol(format!("reg:{:?}", v.mode)),
+            sexpr::Value::Number(format!("{}", v.reg.0)),
         ])
     }
 }
 
-impl sexpr::IntoValue for AddExpr {
-    fn into(&self) -> sexpr::Value {
+impl From<&AddExpr> for sexpr::Value {
+    fn from(v: &AddExpr) -> Self {
         sexpr::Value::List(vec![
-            sexpr::Value::Symbol(format!("add:{:?}", self.mode)),
-            sexpr::IntoValue::into(&*self.lhs),
-            sexpr::IntoValue::into(&*self.rhs),
+            sexpr::Value::Symbol(format!("add:{:?}", v.mode)),
+            Into::into(&*v.lhs),
+            Into::into(&*v.rhs),
         ])
     }
 }
 
-impl sexpr::IntoValue for ConstExpr {
-    fn into(&self) -> sexpr::Value {
+impl From<&ConstExpr> for sexpr::Value {
+    fn from(v: &ConstExpr) -> Self {
         sexpr::Value::List(vec![
-            sexpr::Value::Symbol(format!("const:{:?}", self.mode)),
-            sexpr::Value::Symbol(self.value.to_string()),
+            sexpr::Value::Symbol(String::from("const")),
+            match &v.value {
+                ConstValue::Float { data, precision } => sexpr::Value::List(vec![
+                    match precision {
+                        Precision::Single => sexpr::Value::Symbol(DataMode::SP1.to_string()),
+                    },
+                    sexpr::Value::Symbol(format!("{}", data)),
+                ]),
+            },
         ])
     }
 }

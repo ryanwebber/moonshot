@@ -1,12 +1,12 @@
 use crate::ast;
 use crate::ir;
-use crate::tokenizer;
 
 pub struct Compiler {}
 
 #[derive(Debug)]
 pub struct CompilerErr<'a> {
-    pub hinted_range: &'a [tokenizer::Token<'a>],
+    _dummy: &'a (),
+    msg: String,
 }
 
 pub struct ExternalHeader<'a> {
@@ -54,23 +54,46 @@ struct RegistorAllocator {
     next_register: usize,
 }
 
-fn compile_expr<'a>(expr: &ast::Expression) -> Result<ir::RVal, CompilerErr<'a>> {
+fn compile_expr<'a>(
+    expr: &ast::Expression,
+    reg_allocator: &mut RegistorAllocator,
+) -> Result<ir::RVal, CompilerErr<'a>> {
     match expr {
         ast::Expression::BinOpExpression { lhs, op, rhs } => {
-            let lhs_ir = compile_expr(&*lhs)?;
-            let rhs_ir = compile_expr(&*rhs)?;
+            let lhs_ir = compile_expr(&*lhs, reg_allocator)?;
+            let rhs_ir = compile_expr(&*rhs, reg_allocator)?;
             match op {
                 ast::Operator::Addition => Ok(ir::RVal::Add(ir::AddExpr {
                     mode: ir::DataMode::SP1,
                     lhs: Box::new(lhs_ir),
                     rhs: Box::new(rhs_ir),
-                }))
+                })),
             }
-        },
+        }
         ast::Expression::NumberLiteralExpression { value } => {
+            // TODO: Support different binary types
+            let value: f32 = value.parse().map_err(|e| CompilerErr {
+                _dummy: &(),
+                msg: format!("Unexpected number format: {}", e),
+            })?;
+
             Ok(ir::RVal::Const(ir::ConstExpr {
+                value: ir::ConstValue::Float {
+                    data: value,
+                    precision: ir::Precision::Single,
+                },
+            }))
+        }
+        ast::Expression::VarAccess { path } => {
+            // TODO: support proper variable lookups
+            let reg = reg_allocator.lookup(
+                path.first()
+                    .expect("var access should have at least one path compunent"),
+            )?;
+
+            Ok(ir::RVal::Reg(ir::RegExpr {
+                reg,
                 mode: ir::DataMode::SP1,
-                value: String::from(*value),
             }))
         }
     }
@@ -88,16 +111,14 @@ fn compile_proc<'a>(proc: &ast::Procedure<'a>) -> Result<ProcedureBody, Compiler
                     mode: ir::DataMode::SP1,
                 };
 
-                let expr_ir = compile_expr(expression)?;
+                let expr_ir = compile_expr(expression, &mut reg_allocator)?;
                 let set_inst = ir::Instruction::Set(ir::LVal::Reg(dest_reg_expr), expr_ir);
                 instructions.push(set_inst);
             }
         }
     }
 
-    let body = ProcedureBody {
-        instructions,
-    };
+    let body = ProcedureBody { instructions };
 
     Ok(body)
 }
@@ -122,7 +143,7 @@ impl Compiler {
             .iter()
             .map(|proc| {
                 let body = compile_proc(proc)?;
-                let layout = ProcedureLayout { };
+                let layout = ProcedureLayout {};
                 let prototype = ProcedurePrototype::from(proc);
 
                 Ok(ProcedureDefinition {
@@ -190,14 +211,16 @@ impl<'a> ImportMap<'a> {
 
 impl RegistorAllocator {
     fn new() -> Self {
-        RegistorAllocator {
-            next_register: 0,
-        }
+        RegistorAllocator { next_register: 0 }
     }
 
     fn allocate(&mut self) -> ir::Register {
         let register = ir::Register(self.next_register);
         self.next_register += 1;
         register
+    }
+
+    fn lookup<'a>(&self, _identifier: &str) -> Result<ir::Register, CompilerErr<'a>> {
+        Ok(ir::Register(1337))
     }
 }

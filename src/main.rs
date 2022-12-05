@@ -13,13 +13,13 @@ fn main() {
             import other from "./other.pf";
 
             proc main (x: i1, y: i2) -> (z: i3) {
-                let x: i15 = (6 + ((2 + 5) + 0));
+                let x: i15 = (6 + ((2 + abc) + 0));
                 let x: i15 = 9;
             }
 
             proc foo i15 -> i15 {
                 let bar: i15 = 1;
-                let baz: (_: i15) = 1;
+                let baz: (_: i15) = 2;
             }
         }
 
@@ -58,8 +58,8 @@ fn main() {
         Ok(ast) => {
             println!("== Parse ==");
             println!();
-            let tree = sexpr::IntoValue::into(&ast);
-            println!("{}", tree);
+            let tree = sexpr::Value::from(&ast);
+            println!("{}", tree.to_pretty());
             println!();
             ast
         }
@@ -87,7 +87,7 @@ fn main() {
                 for proc in &c.procedures {
                     println!("      {} {{", proc.prototype);
                     for instr in &proc.body.instructions {
-                        println!("        {}", sexpr::IntoValue::into(instr));
+                        println!("        {}", sexpr::Value::from(instr).to_pretty());
                     }
                     println!("      }}")
                 }

@@ -1,4 +1,4 @@
-use crate::sexpr::*;
+use crate::sexpr;
 
 pub struct Parse<'a> {
     pub modules: Vec<Module<'a>>,
@@ -52,6 +52,9 @@ pub enum Expression<'a> {
     NumberLiteralExpression {
         value: &'a str,
     },
+    VarAccess {
+        path: Vec<&'a str>,
+    },
 }
 
 pub enum Operator {
@@ -62,108 +65,118 @@ pub struct DataType<'a> {
     pub name: &'a str,
 }
 
-impl<'a> IntoValue for Operator {
-    fn into(&self) -> crate::sexpr::Value {
-        match self {
-            Self::Addition => Value::Symbol(String::from("+")),
+impl From<&Operator> for sexpr::Value {
+    fn from(v: &Operator) -> Self {
+        match v {
+            Operator::Addition => sexpr::Value::Symbol(String::from("+")),
         }
     }
 }
 
-impl<'a> IntoValue for Expression<'a> {
-    fn into(&self) -> crate::sexpr::Value {
-        match self {
-            Self::BinOpExpression { lhs, op, rhs } => Value::List(vec![
-                IntoValue::into(&*op),
-                IntoValue::into(&**lhs),
-                IntoValue::into(&**rhs),
+impl<'a> From<&Expression<'a>> for sexpr::Value {
+    fn from(v: &Expression<'a>) -> Self {
+        match v {
+            Expression::BinOpExpression { lhs, op, rhs } => sexpr::Value::List(vec![
+                Into::into(&*op),
+                Into::into(&**lhs),
+                Into::into(&**rhs),
             ]),
-            Self::NumberLiteralExpression { value } => Value::Number(String::from(*value)),
+            Expression::NumberLiteralExpression { value } => {
+                sexpr::Value::Number(String::from(*value))
+            }
+            Expression::VarAccess { path } => sexpr::Value::List(
+                path.iter()
+                    .map(|p| sexpr::Value::Symbol(String::from(*p)))
+                    .collect(),
+            ),
         }
     }
 }
 
-impl<'a> IntoValue for Statement<'a> {
-    fn into(&self) -> crate::sexpr::Value {
-        match self {
-            Self::Definition {
+impl<'a> From<&Statement<'a>> for sexpr::Value {
+    fn from(v: &Statement<'a>) -> Self {
+        match v {
+            Statement::Definition {
                 name,
                 type_container,
                 expression,
-            } => Value::List(vec![
-                Value::Symbol(String::from("defn")),
-                Value::Symbol(String::from(*name)),
-                IntoValue::into(type_container),
-                IntoValue::into(expression),
+            } => sexpr::Value::List(vec![
+                sexpr::Value::Symbol(String::from("defn")),
+                sexpr::Value::Symbol(String::from(*name)),
+                sexpr::Value::from(type_container),
+                sexpr::Value::from(expression),
             ]),
         }
     }
 }
 
-impl<'a> IntoValue for DataType<'a> {
-    fn into(&self) -> crate::sexpr::Value {
-        Value::Symbol(String::from(self.name))
+impl<'a> From<&DataType<'a>> for sexpr::Value {
+    fn from(v: &DataType<'a>) -> Self {
+        sexpr::Value::Symbol(String::from(v.name))
     }
 }
 
-impl<'a> IntoValue for Block<'a> {
-    fn into(&self) -> crate::sexpr::Value {
-        Value::List(self.statements.iter().map(IntoValue::into).collect())
+impl<'a> From<&Block<'a>> for sexpr::Value {
+    fn from(v: &Block<'a>) -> Self {
+        sexpr::Value::List(v.statements.iter().map(Into::into).collect())
     }
 }
 
-impl<'a> IntoValue for NamedElement<'a> {
-    fn into(&self) -> crate::sexpr::Value {
-        Value::List(vec![
-            Value::Symbol(String::from(self.name)),
-            IntoValue::into(&self.data_type),
+impl<'a> From<&NamedElement<'a>> for sexpr::Value {
+    fn from(v: &NamedElement<'a>) -> Self {
+        sexpr::Value::List(vec![
+            sexpr::Value::Symbol(String::from(v.name)),
+            sexpr::Value::from(&v.data_type),
         ])
     }
 }
 
-impl<'a> IntoValue for TypeContainer<'a> {
-    fn into(&self) -> crate::sexpr::Value {
-        Value::List(self.elements.iter().map(IntoValue::into).collect())
+impl<'a> From<&TypeContainer<'a>> for sexpr::Value {
+    fn from(v: &TypeContainer<'a>) -> Self {
+        sexpr::Value::List(v.elements.iter().map(Into::into).collect())
     }
 }
 
-impl<'a> IntoValue for Import<'a> {
-    fn into(&self) -> crate::sexpr::Value {
-        let mut list = vec![Value::Symbol(String::from("import")), Value::Symbol(String::from(self.name))];
+impl<'a> From<&Import<'a>> for sexpr::Value {
+    fn from(v: &Import<'a>) -> Self {
+        let mut list = vec![
+            sexpr::Value::Symbol(String::from("import")),
+            sexpr::Value::Symbol(String::from(v.name)),
+        ];
 
-        if let Some(path) = &self.path {
-            list.push(Value::String(String::from(path)));
+        if let Some(path) = &v.path {
+            list.push(sexpr::Value::String(String::from(path)));
         }
 
-        Value::List(list)
+        sexpr::Value::List(list)
     }
 }
 
-impl<'a> IntoValue for Procedure<'a> {
-    fn into(&self) -> crate::sexpr::Value {
-        Value::List(vec![
-            Value::Symbol(String::from("proc")),
-            Value::Symbol(String::from(self.name)),
-            IntoValue::into(&self.input_defn),
-            IntoValue::into(&self.return_defn),
-            IntoValue::into(&self.block),
+impl<'a> From<&Procedure<'a>> for sexpr::Value {
+    fn from(v: &Procedure<'a>) -> Self {
+        sexpr::Value::List(vec![
+            sexpr::Value::Symbol(String::from("proc")),
+            sexpr::Value::Symbol(String::from(v.name)),
+            sexpr::Value::from(&v.input_defn),
+            sexpr::Value::from(&v.return_defn),
+            sexpr::Value::from(&v.block),
         ])
     }
 }
 
-impl<'a> IntoValue for Module<'a> {
-    fn into(&self) -> crate::sexpr::Value {
-        Value::List(vec![
-            Value::Symbol(String::from("module")),
-            Value::Symbol(String::from(self.name)),
-            Value::List(self.imports.iter().map(IntoValue::into).collect()),
-            Value::List(self.procs.iter().map(IntoValue::into).collect()),
+impl<'a> From<&Module<'a>> for sexpr::Value {
+    fn from(v: &Module<'a>) -> Self {
+        sexpr::Value::List(vec![
+            sexpr::Value::Symbol(String::from("module")),
+            sexpr::Value::Symbol(String::from(v.name)),
+            sexpr::Value::List(v.imports.iter().map(Into::into).collect()),
+            sexpr::Value::List(v.procs.iter().map(Into::into).collect()),
         ])
     }
 }
 
-impl<'a> IntoValue for Parse<'a> {
-    fn into(&self) -> crate::sexpr::Value {
-        Value::List(self.modules.iter().map(IntoValue::into).collect())
+impl<'a> From<&Parse<'a>> for sexpr::Value {
+    fn from(v: &Parse<'a>) -> Self {
+        sexpr::Value::List(v.modules.iter().map(Into::into).collect())
     }
 }

@@ -1,3 +1,10 @@
+pub struct PrettyPrintable<'a> {
+    _indent: usize,
+    node: &'a Value,
+}
+
+struct Printer;
+
 pub enum Value {
     List(Vec<Value>),
     Nil,
@@ -6,57 +13,70 @@ pub enum Value {
     String(String),
 }
 
-pub struct Printer {}
-
-pub trait Display {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>, p: &mut Printer) -> Result<(), std::fmt::Error>;
-}
-
-pub trait IntoValue {
-    fn into(&self) -> Value;
-}
-
 impl Printer {
-    fn open(&mut self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+    fn write_expr<F>(f: &mut std::fmt::Formatter<'_>, ff: F) -> Result<(), std::fmt::Error>
+    where
+        F: FnOnce(&mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error>,
+    {
         write!(f, "(")?;
-        Ok(())
-    }
-
-    fn close(&mut self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        ff(f)?;
         write!(f, ")")?;
         Ok(())
     }
 
-    fn space(&mut self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, " ")?;
-        Ok(())
+    fn write_space(f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, " ")
+    }
+
+    fn write_nil(f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "nil")
+    }
+
+    fn write_number(f: &mut std::fmt::Formatter<'_>, v: &str) -> Result<(), std::fmt::Error> {
+        write!(f, "{}", v)
+    }
+
+    fn write_string(f: &mut std::fmt::Formatter<'_>, v: &str) -> Result<(), std::fmt::Error> {
+        write!(f, "\"{}\"", v)
+    }
+
+    fn write_symbol(f: &mut std::fmt::Formatter<'_>, v: &str) -> Result<(), std::fmt::Error> {
+        write!(f, "{}", v)
     }
 }
 
-impl Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>, p: &mut Printer) -> Result<(), std::fmt::Error> {
-        match &self {
+impl<'a> std::fmt::Display for PrettyPrintable<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        self.node.fmt(f)
+    }
+}
+
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
             Value::List(vec) => {
-                p.open(f)?;
-                for (i, v) in vec.iter().enumerate() {
-                    v.fmt(f, p)?;
-                    if i < vec.len() - 1 {
-                        p.space(f)?;
+                Printer::write_expr(f, |f| {
+                    for (i, v) in vec.iter().enumerate() {
+                        v.fmt(f)?;
+                        if i < vec.len() - 1 {
+                            Printer::write_space(f)?;
+                        }
                     }
-                }
-                p.close(f)?;
+
+                    Ok(())
+                })?;
             }
             Value::Nil => {
-                write!(f, "nil")?;
+                Printer::write_nil(f)?;
             }
-            Value::Number(value) => {
-                write!(f, "{}", value)?;
+            Value::Number(v) => {
+                Printer::write_number(f, v)?;
             }
-            Value::String(value) => {
-                write!(f, "\"{}\"", value)?;
+            Value::String(v) => {
+                Printer::write_string(f, v)?;
             }
-            Value::Symbol(value) => {
-                write!(f, "{}", value)?;
+            Value::Symbol(v) => {
+                Printer::write_symbol(f, v)?;
             }
         };
 
@@ -64,11 +84,11 @@ impl Display for Value {
     }
 }
 
-impl<'a> std::fmt::Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut p = Printer {};
-
-        Display::fmt(self, f, &mut p)?;
-        Ok(())
+impl Value {
+    pub fn to_pretty<'a>(&'a self) -> PrettyPrintable<'a> {
+        PrettyPrintable {
+            _indent: 0,
+            node: self,
+        }
     }
 }
