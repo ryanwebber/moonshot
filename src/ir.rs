@@ -1,5 +1,3 @@
-use std::fmt::write;
-
 use crate::sexpr;
 
 pub enum Instruction {

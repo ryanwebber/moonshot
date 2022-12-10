@@ -1,12 +1,16 @@
+use std::collections::HashMap;
+
 use crate::ast;
 use crate::ir;
 
 pub struct Compiler {}
 
-#[derive(Debug)]
-pub struct CompilerErr<'a> {
-    _dummy: &'a (),
-    msg: String,
+pub struct PackagingError {
+    pub msg: String,
+}
+
+pub struct CompilerError {
+    pub msg: String,
 }
 
 pub struct ExternalHeader<'a> {
@@ -50,14 +54,19 @@ pub struct ModuleCompilation {
     pub procedures: Vec<ProcedureDefinition>,
 }
 
-struct RegistorAllocator {
-    next_register: usize,
+pub struct ProgramCompilation<'a> {
+    pub modules: &'a [ModuleCompilation],
 }
 
-fn compile_expr<'a>(
+struct RegistorAllocator {
+    next_register: usize,
+    lookup_table: HashMap<String, usize>,
+}
+
+fn compile_expr(
     expr: &ast::Expression,
     reg_allocator: &mut RegistorAllocator,
-) -> Result<ir::RVal, CompilerErr<'a>> {
+) -> Result<ir::RVal, CompilerError> {
     match expr {
         ast::Expression::BinOpExpression { lhs, op, rhs } => {
             let lhs_ir = compile_expr(&*lhs, reg_allocator)?;
@@ -72,8 +81,7 @@ fn compile_expr<'a>(
         }
         ast::Expression::NumberLiteralExpression { value } => {
             // TODO: Support different binary types
-            let value: f32 = value.parse().map_err(|e| CompilerErr {
-                _dummy: &(),
+            let value: f32 = value.parse().map_err(|e| CompilerError {
                 msg: format!("Unexpected number format: {}", e),
             })?;
 
@@ -86,10 +94,13 @@ fn compile_expr<'a>(
         }
         ast::Expression::VarAccess { path } => {
             // TODO: support proper variable lookups
-            let reg = reg_allocator.lookup(
-                path.first()
-                    .expect("var access should have at least one path compunent"),
-            )?;
+            let path_component = path
+                .first()
+                .expect("var access should have been parsed with at least one path component");
+
+            let reg = reg_allocator.lookup(path_component).ok_or(CompilerError {
+                msg: format!("Use of undeclared variable '{}'", path_component),
+            })?;
 
             Ok(ir::RVal::Reg(ir::RegExpr {
                 reg,
@@ -99,15 +110,23 @@ fn compile_expr<'a>(
     }
 }
 
-fn compile_proc<'a>(proc: &ast::Procedure<'a>) -> Result<ProcedureBody, CompilerErr<'a>> {
+fn compile_proc<'a>(proc: &ast::Procedure<'a>) -> Result<ProcedureBody, CompilerError> {
     let mut instructions: Vec<ir::Instruction> = Vec::new();
     let mut reg_allocator = RegistorAllocator::new();
 
     for statement in &proc.block.statements {
         match statement {
-            ast::Statement::Definition { expression, .. } => {
+            ast::Statement::Definition {
+                expression, name, ..
+            } => {
+                let reg = reg_allocator
+                    .try_allocate_unused(name)
+                    .map_err(|_| CompilerError {
+                        msg: format!("Variable '{}' already defined", name),
+                    })?;
+
                 let dest_reg_expr = ir::RegExpr {
-                    reg: reg_allocator.allocate(),
+                    reg,
                     mode: ir::DataMode::SP1,
                 };
 
@@ -130,15 +149,15 @@ impl Compiler {
 
     pub fn check_and_build_header<'a>(
         _module: &ast::Module<'a>,
-    ) -> Result<ModuleHeader, CompilerErr<'a>> {
+    ) -> Result<ModuleHeader, CompilerError> {
         todo!()
     }
 
     pub fn check_and_compile<'a>(
         module: &ast::Module<'a>,
         _import_map: &ImportMap<'_>,
-    ) -> Result<ModuleCompilation, CompilerErr<'a>> {
-        let procedures: Result<Vec<_>, CompilerErr<'a>> = module
+    ) -> Result<ModuleCompilation, CompilerError> {
+        let procedures: Result<Vec<_>, CompilerError> = module
             .procs
             .iter()
             .map(|proc| {
@@ -158,6 +177,12 @@ impl Compiler {
             module_name: String::from(module.name),
             procedures: procedures?,
         })
+    }
+
+    pub fn package_modules<'a>(
+        modules: &'a [ModuleCompilation],
+    ) -> Result<ProgramCompilation<'a>, PackagingError> {
+        Ok(ProgramCompilation { modules: modules })
     }
 }
 
@@ -193,8 +218,8 @@ impl ProcedurePrototype {
         };
 
         ProcedurePrototype {
-            signature: signature,
-            description: description,
+            signature,
+            description,
         }
     }
 }
@@ -211,16 +236,24 @@ impl<'a> ImportMap<'a> {
 
 impl RegistorAllocator {
     fn new() -> Self {
-        RegistorAllocator { next_register: 0 }
+        RegistorAllocator {
+            next_register: 0,
+            lookup_table: HashMap::new(),
+        }
     }
 
-    fn allocate(&mut self) -> ir::Register {
-        let register = ir::Register(self.next_register);
-        self.next_register += 1;
-        register
+    fn try_allocate_unused(&mut self, identifier: &str) -> Result<ir::Register, ()> {
+        if self.lookup_table.contains_key(identifier) {
+            Err(())
+        } else {
+            let reg = self.next_register;
+            self.lookup_table.insert(identifier.to_string(), reg);
+            self.next_register += 1;
+            Ok(ir::Register(reg))
+        }
     }
 
-    fn lookup<'a>(&self, _identifier: &str) -> Result<ir::Register, CompilerErr<'a>> {
-        Ok(ir::Register(1337))
+    fn lookup(&self, identifier: &str) -> Option<ir::Register> {
+        self.lookup_table.get(identifier).map(|r| ir::Register(*r))
     }
 }
