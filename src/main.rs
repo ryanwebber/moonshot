@@ -1,3 +1,4 @@
+pub mod agc;
 pub mod ast;
 pub mod compiler;
 pub mod generator;
@@ -74,13 +75,16 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
     };
 
     let program = compiler::Compiler::package_modules(&modules)?;
-    let buffer = {
-        let mut buf: Vec<u8> = Vec::new();
-        let _ = generator::Generator::try_generate(&program, &mut Box::new(&mut buf))?;
-        buf
+    let contents = {
+        let mut buf = Vec::new();
+        let mut writer = Box::new(&mut buf);
+        let _ = generator::Generator::try_generate(&program, &mut writer)?;
+        std::str::from_utf8(buf.as_slice())
+            .expect("Unable to unwrap buffer as string")
+            .to_string()
     };
 
-    Ok(std::str::from_utf8(buffer.as_slice()).unwrap().to_string())
+    Ok(contents)
 }
 
 fn main() {
@@ -111,7 +115,7 @@ fn main() {
             println!("{}", out);
         },
         Err(e) => {
-            println!("Error: {}", e);
+            println!("{}", e);
         }
     }
 }
