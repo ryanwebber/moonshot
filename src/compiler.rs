@@ -31,6 +31,7 @@ pub struct ProcedureBody {
 pub struct ProcedureLayout {}
 
 pub struct ProcedurePrototype {
+    pub name: String,
     pub signature: String,
     pub description: String,
 }
@@ -63,14 +64,14 @@ struct RegistorAllocator {
     lookup_table: HashMap<String, usize>,
 }
 
-fn compile_expr(
+fn try_compile_expr(
     expr: &ast::Expression,
     reg_allocator: &mut RegistorAllocator,
 ) -> Result<ir::RVal, CompilerError> {
     match expr {
         ast::Expression::BinOpExpression { lhs, op, rhs } => {
-            let lhs_ir = compile_expr(&*lhs, reg_allocator)?;
-            let rhs_ir = compile_expr(&*rhs, reg_allocator)?;
+            let lhs_ir = try_compile_expr(&*lhs, reg_allocator)?;
+            let rhs_ir = try_compile_expr(&*rhs, reg_allocator)?;
             match op {
                 ast::Operator::Addition => Ok(ir::RVal::Add(ir::AddExpr {
                     mode: ir::DataMode::SP1,
@@ -110,7 +111,7 @@ fn compile_expr(
     }
 }
 
-fn compile_proc<'a>(proc: &ast::Procedure<'a>) -> Result<ProcedureBody, CompilerError> {
+fn try_compile_proc<'a>(proc: &ast::Procedure<'a>) -> Result<ProcedureBody, CompilerError> {
     let mut instructions: Vec<ir::Instruction> = Vec::new();
     let mut reg_allocator = RegistorAllocator::new();
 
@@ -130,7 +131,7 @@ fn compile_proc<'a>(proc: &ast::Procedure<'a>) -> Result<ProcedureBody, Compiler
                     mode: ir::DataMode::SP1,
                 };
 
-                let expr_ir = compile_expr(expression, &mut reg_allocator)?;
+                let expr_ir = try_compile_expr(expression, &mut reg_allocator)?;
                 let set_inst = ir::Instruction::Set(ir::LVal::Reg(dest_reg_expr), expr_ir);
                 instructions.push(set_inst);
             }
@@ -153,7 +154,7 @@ impl Compiler {
         todo!()
     }
 
-    pub fn check_and_compile<'a>(
+    pub fn try_compile<'a>(
         module: &ast::Module<'a>,
         _import_map: &ImportMap<'_>,
     ) -> Result<ModuleCompilation, CompilerError> {
@@ -161,7 +162,7 @@ impl Compiler {
             .procs
             .iter()
             .map(|proc| {
-                let body = compile_proc(proc)?;
+                let body = try_compile_proc(proc)?;
                 let layout = ProcedureLayout {};
                 let prototype = ProcedurePrototype::from(proc);
 
@@ -218,6 +219,7 @@ impl ProcedurePrototype {
         };
 
         ProcedurePrototype {
+            name: String::from(proc.name),
             signature,
             description,
         }

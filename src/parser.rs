@@ -217,6 +217,7 @@ impl Parser {
         let base_identifier = stream.try_consume(TokenKind::Identifier, Required::No)?;
         let mut path: Vec<&'a str> = vec![base_identifier.range];
 
+        // TODO: This doesn't create a proper AST representation for tuples
         loop {
             match stream.peek() {
                 Some(t) if t.kind == TokenKind::Dot => {

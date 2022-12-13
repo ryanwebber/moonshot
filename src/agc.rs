@@ -4,11 +4,11 @@ pub struct Instruction {
 }
 
 impl Instruction {
-    pub fn write_opcode<W>(&self, w: &mut W) -> Result<(), std::io::Error> where W: std::io::Write {
+    pub fn write_opcode(&self, w: &mut dyn std::io::Write) -> Result<(), std::io::Error> {
         write!(w, "{}", self.opcode)
     }
 
-    pub fn write_operands<W>(&self, w: &mut W) -> Result<(), std::io::Error> where W: std::io::Write {
+    pub fn write_operands(&self, w: &mut dyn std::io::Write) -> Result<(), std::io::Error> {
         for (i, operand) in self.operands.iter().enumerate() {
             if i > 0 {
                 write!(w, " ")?;
@@ -39,16 +39,18 @@ impl Instruction {
 
 /* ----------------- OPCODES ------------------ */
 
-// Noop
-
-pub fn noop() -> Instruction {
+pub fn ins_noop() -> Instruction {
     Instruction::simple("NOOP")
 }
 
-pub fn tc(label: &str) -> Instruction {
+pub fn ins_return() -> Instruction {
+    Instruction::simple("RETURN")
+}
+
+pub fn ins_tc(label: &str) -> Instruction {
     Instruction::basic("TC", String::from(label))
 }
 
-pub fn tc_a() -> Instruction {
+pub fn ins_tc_a() -> Instruction {
     Instruction::simple("XXALQ")
 }

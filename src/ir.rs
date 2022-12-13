@@ -4,6 +4,7 @@ pub enum Instruction {
     Set(LVal, RVal),
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub struct Register(pub usize);
 
 pub enum LVal {

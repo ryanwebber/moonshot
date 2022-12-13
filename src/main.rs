@@ -1,3 +1,5 @@
+use std::fmt::format;
+
 pub mod agc;
 pub mod ast;
 pub mod compiler;
@@ -14,17 +16,13 @@ struct ReportableError {
 
 impl From<compiler::CompilerError> for ReportableError {
     fn from(e: compiler::CompilerError) -> Self {
-        ReportableError {
-            msg: e.msg,
-        }
+        ReportableError { msg: e.msg }
     }
 }
 
 impl From<compiler::PackagingError> for ReportableError {
     fn from(e: compiler::PackagingError) -> Self {
-        ReportableError {
-            msg: e.msg,
-        }
+        ReportableError { msg: e.msg }
     }
 }
 
@@ -68,20 +66,19 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
         let modules: Result<Vec<compiler::ModuleCompilation>, _> = parse
             .modules
             .iter()
-            .map(|m| compiler::Compiler::check_and_compile(m, &compiler::ImportMap::empty()))
+            .map(|m| compiler::Compiler::try_compile(m, &compiler::ImportMap::empty()))
             .collect();
-        
+
         modules?
     };
 
     let program = compiler::Compiler::package_modules(&modules)?;
     let contents = {
-        let mut buf = Vec::new();
-        let mut writer = Box::new(&mut buf);
-        let _ = generator::Generator::try_generate(&program, &mut writer)?;
-        std::str::from_utf8(buf.as_slice())
-            .expect("Unable to unwrap buffer as string")
-            .to_string()
+        let package = generator::Generator::try_generate(&program)?;
+        format!(
+            "{}\n\n# === ERASABLE MEMORY === \n\n{}",
+            &package.fixed_source, &package.erasable_source
+        )
     };
 
     Ok(contents)
@@ -99,9 +96,7 @@ fn main() {
                 let y: i15 = x;
             }
 
-            proc foo i15 -> i15 {
-                let bar: i15 = 1;
-                let baz: (_: i15) = 2;
+            proc foobar i15 -> i15 {
             }
         }
 
@@ -109,11 +104,10 @@ fn main() {
         }
     "#};
 
-
     match try_compile(rope) {
         Ok(out) => {
             println!("{}", out);
-        },
+        }
         Err(e) => {
             println!("{}", e);
         }

@@ -169,6 +169,7 @@ impl<'a> Iterator for TokenIter<'a> {
                 },
                 TokenizerState::MatchingIdentifier { length } => match c {
                     'a'..='z' | 'A'..='Z' | '0'..='9' | '_' => {
+                        // Keep matching
                         state = TokenizerState::MatchingIdentifier { length: length + 1 }
                     }
                     _ => {
@@ -177,6 +178,8 @@ impl<'a> Iterator for TokenIter<'a> {
                 },
                 TokenizerState::MatchingNumber { length } => match c {
                     '0'..='9' | '.' => {
+                        // Keep matching
+                        // TODO: properly tokenize numbers (ex: can't have multiple periods)
                         state = TokenizerState::MatchingNumber { length: length + 1 }
                     }
                     _ => {
@@ -188,6 +191,7 @@ impl<'a> Iterator for TokenIter<'a> {
                 }
                 TokenizerState::MatchingString { length } => match c {
                     '"' => {
+                        // Eat the token and end the string
                         _ = iter.next();
                         _ = self.remaining.next();
                         state = TokenizerState::MatchingString { length: length + 1 };
@@ -281,6 +285,7 @@ impl<'a> Scanner<'a> {
 
 impl StringNormalizer {
     pub fn extract_and_unescape(s: &str) -> Result<String, StringNormalizationError> {
+        // TODO: Actually implement this
         if s.len() < 2 {
             Err(StringNormalizationError::UnexpectedStringFormat(
                 String::from("Expected string to be at least two (2) characters long"),
