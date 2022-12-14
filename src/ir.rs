@@ -1,5 +1,8 @@
 use crate::sexpr;
 
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct Id(pub usize);
+
 pub enum Instruction {
     Set(LVal, RVal),
 }
@@ -32,10 +35,12 @@ pub struct ConstExpr {
     pub value: ConstValue,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConstValue {
-    Float { data: f32, precision: Precision },
+    Float { base: i32, exponent: i32, precision: Precision },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Precision {
     Single,
 }
@@ -107,11 +112,11 @@ impl From<&ConstExpr> for sexpr::Value {
         sexpr::Value::List(vec![
             sexpr::Value::Symbol(String::from("const")),
             match &v.value {
-                ConstValue::Float { data, precision } => sexpr::Value::List(vec![
+                ConstValue::Float { base, exponent, precision } => sexpr::Value::List(vec![
                     match precision {
                         Precision::Single => sexpr::Value::Symbol(DataMode::SP1.to_string()),
                     },
-                    sexpr::Value::Symbol(format!("{}", data)),
+                    sexpr::Value::Symbol(format!("{} x 10^{}", base, exponent)),
                 ]),
             },
         ])

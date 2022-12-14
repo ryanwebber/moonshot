@@ -1,5 +1,3 @@
-use std::fmt::format;
-
 pub mod agc;
 pub mod ast;
 pub mod compiler;
@@ -75,10 +73,18 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
     let program = compiler::Compiler::package_modules(&modules)?;
     let contents = {
         let package = generator::Generator::try_generate(&program)?;
-        format!(
-            "{}\n\n# === ERASABLE MEMORY === \n\n{}",
-            &package.fixed_source, &package.erasable_source
-        )
+        indoc::formatdoc! {"
+            # === FIXED MEMORY ===
+
+            {}
+
+            # === ERASABLE MEMORY ===
+
+            {}
+            ",
+            &package.fixed_source,
+            &package.erasable_source,
+        }
     };
 
     Ok(contents)
@@ -91,12 +97,9 @@ fn main() {
             import other from "./other.pf";
 
             proc main (x: i1, y: i2) -> (z: i3) {
-                let abc: i15 = 78.1;
-                let x: i15 = (6 + ((2 + abc) + 0));
-                let y: i15 = x;
-            }
-
-            proc foobar i15 -> i15 {
+                let abc: i15 = 78;
+                let x: i15 = (78 + 2);
+                let y: i15 = (x + 1);
             }
         }
 

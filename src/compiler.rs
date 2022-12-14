@@ -56,7 +56,13 @@ pub struct ModuleCompilation {
 }
 
 pub struct ProgramCompilation<'a> {
-    pub modules: &'a [ModuleCompilation],
+    pub definitions: Vec<TopLevelDefinition<'a>>,
+}
+
+pub struct TopLevelDefinition<'a> {
+    pub id: ir::Id,
+    pub module: &'a ModuleCompilation,
+    pub proc: &'a ProcedureDefinition,
 }
 
 struct RegistorAllocator {
@@ -82,13 +88,14 @@ fn try_compile_expr(
         }
         ast::Expression::NumberLiteralExpression { value } => {
             // TODO: Support different binary types
-            let value: f32 = value.parse().map_err(|e| CompilerError {
+            let value: i32 = value.parse().map_err(|e| CompilerError {
                 msg: format!("Unexpected number format: {}", e),
             })?;
 
             Ok(ir::RVal::Const(ir::ConstExpr {
                 value: ir::ConstValue::Float {
-                    data: value,
+                    base: value,
+                    exponent: 0,
                     precision: ir::Precision::Single,
                 },
             }))
@@ -183,7 +190,25 @@ impl Compiler {
     pub fn package_modules<'a>(
         modules: &'a [ModuleCompilation],
     ) -> Result<ProgramCompilation<'a>, PackagingError> {
-        Ok(ProgramCompilation { modules: modules })
+        let mut definitions: Vec<TopLevelDefinition<'a>> = Vec::new();
+        
+        // TODO: Properly allocate identifiers for functions during header generation
+        let mut index = 0usize;
+
+        for module in modules {
+            for proc in &module.procedures {
+                let id = ir::Id(index);
+                definitions.push(TopLevelDefinition {
+                    id,
+                    module,
+                    proc,
+                });
+
+                index += 1;
+            }
+        }
+        
+        Ok(ProgramCompilation { definitions })
     }
 }
 
