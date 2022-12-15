@@ -1,7 +1,3 @@
-pub struct Generator;
-
-use std::collections::HashMap;
-
 use crate::agc;
 use crate::compiler;
 use crate::ir;
@@ -19,6 +15,9 @@ struct AssemblyWriter<'a> {
     target: &'a mut dyn SourceWritable,
     queued_labels: Vec<Label>,
 }
+
+pub struct Generator;
+
 pub enum GeneratorError {
     IoError(std::io::Error),
     LabelOverflow,
@@ -54,8 +53,7 @@ trait SourceWritable {
 
 struct WorkspaceArtifact {/* information on stack */}
 
-struct WorkspaceContext<'a> {
-    procedure: &'a compiler::ProcedureDefinition,
+struct WorkspaceContext {
     stack: VirtualStack,
 }
 
@@ -73,7 +71,7 @@ impl<'a> AssemblyGenerator<'a> {
     }
 
     fn try_push_const_expr(&mut self, expr: &ir::ConstExpr) -> Result<(), GeneratorError> {
-        let const_slot = Slot::from_const(expr.id);
+        let const_slot: Slot = Label::with(expr.id, LabelType::Const).into();
         self.writer
             .write_instruction(agc::Instruction::CAF, None, |w| {
                 write!(w, "{}", const_slot)
@@ -89,7 +87,7 @@ impl<'a> AssemblyGenerator<'a> {
     ) -> Result<(), GeneratorError> {
         let dest_slot = context.stack.push();
         match rval {
-            ir::RVal::Add(expr) => {
+            ir::RVal::Add(..) => {
                 self.writer.write_comment("TODO: ADD EXPR")?;
                 Ok(())
             }
@@ -103,7 +101,7 @@ impl<'a> AssemblyGenerator<'a> {
                 Ok(())
             }
             ir::RVal::Reg(expr) => {
-                let source_reg = Slot::from_register(expr.reg);
+                let source_reg: Slot = Label::from(expr.reg).into();
                 self.writer
                     .write_instruction(agc::Instruction::CAE, Some("LOAD REG"), |w| {
                         write!(w, "{}", source_reg)
@@ -134,8 +132,8 @@ impl<'a> AssemblyGenerator<'a> {
     ) -> Result<(), GeneratorError> {
         match instruction {
             ir::Instruction::Set(lhs, rhs) => {
-                let dest_slot = match lhs {
-                    ir::LVal::Reg(expr) => Slot::from_register(expr.reg),
+                let dest_slot: Slot = match lhs {
+                    ir::LVal::Reg(expr) => Label::from(expr.reg).into(),
                 };
 
                 self.try_push(rhs, context)?;
@@ -156,14 +154,13 @@ impl<'a> AssemblyGenerator<'a> {
         procedure: &compiler::ProcedureDefinition,
     ) -> Result<WorkspaceArtifact, GeneratorError> {
         let mut context = WorkspaceContext {
-            procedure,
             stack: VirtualStack::new(),
         };
 
         self.writer.write_comment(&format!("{}", procedure.prototype.signature))?;
 
         // Write the function label
-        self.writer.push_label(Slot::from_procedure(id).label);
+        self.writer.push_label(Label::with(id, LabelType::Procedure));
 
         // Generate the function body
         for instruction in &procedure.body.instructions {
@@ -196,8 +193,8 @@ impl<'a> AssemblyGenerator<'a> {
                     exponent,
                     precision: ir::Precision::Single,
                 } => {
-                    let slot = Slot::from_const(*id);
-                    self.writer.write_const(&slot.label, agc::Instruction::DEC, |w| {
+                    let label = Label::with(*id, LabelType::Const);
+                    self.writer.write_const(&label, agc::Instruction::DEC, |w| {
                         write!(w, "{}.0 E{}", base, exponent)
                     })?;
                 }
@@ -319,6 +316,21 @@ impl<'a> AssemblyWriter<'a> {
     }
 }
 
+impl From<ir::Register> for Label {
+    fn from(reg: ir::Register) -> Self {
+        Label {
+            id: Id::from(reg),
+            kind: LabelType::Workspace,
+        }
+    }
+}
+
+impl Label {
+    fn with(id: ir::Id, kind: LabelType) -> Label {
+        Label { id: Id::from(id), kind }
+    }
+}
+
 impl Generator {
     pub fn try_generate(
         program: &compiler::ProgramCompilation,
@@ -403,35 +415,9 @@ impl std::fmt::Display for Slot {
     }
 }
 
-impl Slot {
-    fn from_const(id: ir::Id) -> Slot {
-        Slot {
-            label: Label {
-                id: Id::from(id),
-                kind: LabelType::Const,
-            },
-            offset: 0
-        }
-    }
-
-    fn from_procedure(id: ir::Id) -> Slot {
-        Slot {
-            label: Label {
-                id: Id::from(id),
-                kind: LabelType::Procedure,
-            },
-            offset: 0
-        }
-    }
-
-    fn from_register(id: ir::Register) -> Slot {
-        Slot {
-            label: Label {
-                id: Id::from(id),
-                kind: LabelType::Workspace,
-            },
-            offset: 0
-        }
+impl From<Label> for Slot {
+    fn from(label: Label) -> Self {
+        Slot { label, offset: 0 }
     }
 }
 
@@ -439,10 +425,6 @@ impl From<&VirtualStack> for WorkspaceArtifact {
     fn from(_: &VirtualStack) -> Self {
         Self {}
     }
-}
-
-impl<'a> WorkspaceContext<'a> {
-    
 }
 
 impl VirtualStack {

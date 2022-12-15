@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::os::unix::raw::mode_t;
 
 use crate::ast;
 use crate::ir;
