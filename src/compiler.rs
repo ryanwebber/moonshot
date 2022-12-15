@@ -1,7 +1,10 @@
 use std::collections::HashMap;
+use std::os::unix::raw::mode_t;
 
 use crate::ast;
 use crate::ir;
+use crate::utils;
+use crate::utils::Counter;
 
 pub struct Compiler {}
 
@@ -13,9 +16,9 @@ pub struct CompilerError {
     pub msg: String,
 }
 
-pub struct ExternalHeader<'a> {
-    pub header: &'a ModuleHeader,
-    pub imported_path: &'a str,
+struct ConstantPool {
+    counter: utils::Counter<ir::Id>,
+    mapping: HashMap<ir::ConstValue, ir::Id>,
 }
 
 pub struct ProcedureDefinition {
@@ -30,54 +33,50 @@ pub struct ProcedureBody {
 
 pub struct ProcedureLayout {}
 
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub struct ProcedurePrototype {
     pub name: String,
     pub signature: String,
-    pub description: String,
 }
 
-impl std::fmt::Display for ProcedurePrototype {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.description)
-    }
+struct RegistorAllocator {
+    counter: utils::Counter<ir::Register>,
+    lookup_table: HashMap<String, ir::Register>,
 }
 
-pub struct ImportMap<'a> {
-    pub external_headers: &'a [ExternalHeader<'a>],
-    pub local_headers: &'a [&'a ModuleHeader],
-    pub system_headers: &'a [&'a ModuleHeader],
+pub struct ModuleHeader {
+    procedures: HashMap<String, (ir::Id, ProcedurePrototype)>
 }
-
-pub struct ModuleHeader {}
 
 pub struct ModuleCompilation {
+    pub constants: HashMap<ir::ConstValue, ir::Id>,
+    pub header: ModuleHeader,
     pub module_name: String,
     pub procedures: Vec<ProcedureDefinition>,
 }
 
-pub struct ProgramCompilation<'a> {
-    pub definitions: Vec<TopLevelDefinition<'a>>,
+pub struct ProgramCompilation {
+    pub constants: HashMap<ir::Id, ir::ConstValue>,
+    pub procedures: Vec<(ir::Id, ProcedureDefinition)>,
+    pub source_map: SourceMap,
 }
 
-pub struct TopLevelDefinition<'a> {
-    pub id: ir::Id,
-    pub module: &'a ModuleCompilation,
-    pub proc: &'a ProcedureDefinition,
+pub struct SourceMap {
 }
 
-struct RegistorAllocator {
-    next_register: usize,
-    lookup_table: HashMap<String, usize>,
+struct State {
+    constant_pool: ConstantPool,
+    register_allocator: RegistorAllocator,
 }
 
 fn try_compile_expr(
     expr: &ast::Expression,
-    reg_allocator: &mut RegistorAllocator,
+    state: &mut State,
 ) -> Result<ir::RVal, CompilerError> {
     match expr {
         ast::Expression::BinOpExpression { lhs, op, rhs } => {
-            let lhs_ir = try_compile_expr(&*lhs, reg_allocator)?;
-            let rhs_ir = try_compile_expr(&*rhs, reg_allocator)?;
+            let lhs_ir = try_compile_expr(&*lhs, state)?;
+            let rhs_ir = try_compile_expr(&*rhs, state)?;
             match op {
                 ast::Operator::Addition => Ok(ir::RVal::Add(ir::AddExpr {
                     mode: ir::DataMode::SP1,
@@ -92,12 +91,16 @@ fn try_compile_expr(
                 msg: format!("Unexpected number format: {}", e),
             })?;
 
+            let const_value = ir::ConstValue::Float {
+                base: value,
+                exponent: 0,
+                precision: ir::Precision::Single,
+            };
+
+            let const_id = state.constant_pool.get_or_allocate(const_value);
+
             Ok(ir::RVal::Const(ir::ConstExpr {
-                value: ir::ConstValue::Float {
-                    base: value,
-                    exponent: 0,
-                    precision: ir::Precision::Single,
-                },
+                id: const_id,
             }))
         }
         ast::Expression::VarAccess { path } => {
@@ -106,7 +109,7 @@ fn try_compile_expr(
                 .first()
                 .expect("var access should have been parsed with at least one path component");
 
-            let reg = reg_allocator.lookup(path_component).ok_or(CompilerError {
+            let reg = state.register_allocator.lookup(path_component).ok_or(CompilerError {
                 msg: format!("Use of undeclared variable '{}'", path_component),
             })?;
 
@@ -118,16 +121,15 @@ fn try_compile_expr(
     }
 }
 
-fn try_compile_proc<'a>(proc: &ast::Procedure<'a>) -> Result<ProcedureBody, CompilerError> {
+fn try_compile_proc<'a>(proc: &ast::Procedure<'a>, state: &mut State) -> Result<ProcedureBody, CompilerError> {
     let mut instructions: Vec<ir::Instruction> = Vec::new();
-    let mut reg_allocator = RegistorAllocator::new();
 
     for statement in &proc.block.statements {
         match statement {
             ast::Statement::Definition {
                 expression, name, ..
             } => {
-                let reg = reg_allocator
+                let reg = state.register_allocator
                     .try_allocate_unused(name)
                     .map_err(|_| CompilerError {
                         msg: format!("Variable '{}' already defined", name),
@@ -138,7 +140,7 @@ fn try_compile_proc<'a>(proc: &ast::Procedure<'a>) -> Result<ProcedureBody, Comp
                     mode: ir::DataMode::SP1,
                 };
 
-                let expr_ir = try_compile_expr(expression, &mut reg_allocator)?;
+                let expr_ir = try_compile_expr(expression, state)?;
                 let set_inst = ir::Instruction::Set(ir::LVal::Reg(dest_reg_expr), expr_ir);
                 instructions.push(set_inst);
             }
@@ -156,20 +158,38 @@ impl Compiler {
     }
 
     pub fn check_and_build_header<'a>(
-        _module: &ast::Module<'a>,
+        module: &ast::Module<'a>,
+        id_pool: &mut utils::Counter<ir::Id>
     ) -> Result<ModuleHeader, CompilerError> {
-        todo!()
+        let mut header = ModuleHeader {
+            procedures: HashMap::new(),
+        };
+
+        for proc in &module.procs {
+            let prototype = ProcedurePrototype::from(proc);
+            let id = id_pool.next().0;
+            header.procedures.insert(prototype.signature.clone(), (id, prototype));
+        }
+
+        Ok(header)
     }
 
-    pub fn try_compile<'a>(
+    pub fn check_and_compile<'a>(
         module: &ast::Module<'a>,
-        _import_map: &ImportMap<'_>,
+        header: ModuleHeader,
     ) -> Result<ModuleCompilation, CompilerError> {
+
+        // TODO: Figure out how to deal with multiple procs
+        let mut state = State {
+            constant_pool: ConstantPool::new(),
+            register_allocator: RegistorAllocator::new(Counter::new(ir::Register(0)))
+        };
+
         let procedures: Result<Vec<_>, CompilerError> = module
             .procs
             .iter()
             .map(|proc| {
-                let body = try_compile_proc(proc)?;
+                let body = try_compile_proc(proc, &mut state)?;
                 let layout = ProcedureLayout {};
                 let prototype = ProcedurePrototype::from(proc);
 
@@ -182,38 +202,71 @@ impl Compiler {
             .collect();
 
         Ok(ModuleCompilation {
+            constants: state.constant_pool.mapping,
+            header,
             module_name: String::from(module.name),
             procedures: procedures?,
         })
     }
 
-    pub fn package_modules<'a>(
-        modules: &'a [ModuleCompilation],
-    ) -> Result<ProgramCompilation<'a>, PackagingError> {
-        let mut definitions: Vec<TopLevelDefinition<'a>> = Vec::new();
-        
-        // TODO: Properly allocate identifiers for functions during header generation
-        let mut index = 0usize;
+    pub fn package_modules(
+        modules: Vec<ModuleCompilation>,
+    ) -> Result<ProgramCompilation, PackagingError> {
 
-        for module in modules {
-            for proc in &module.procedures {
-                let id = ir::Id(index);
-                definitions.push(TopLevelDefinition {
-                    id,
-                    module,
-                    proc,
-                });
-
-                index += 1;
+        // Copy constants
+        let mut constants = HashMap::new();
+        for module in &modules {
+            for (a, b) in &module.constants {
+                constants.insert(*b, a.clone());
             }
         }
-        
-        Ok(ProgramCompilation { definitions })
+
+        // Copy procedures
+        let procedures: Vec<_> = modules.into_iter()
+            .flat_map(|module| {
+                let mut procs: Vec<(ir::Id, ProcedureDefinition)> = Vec::with_capacity(module.procedures.len());
+                
+                for proc in module.procedures {
+                    let id = module.header.procedures.get(&proc.prototype.signature)
+                        .expect("Unable to find id for procedure in the containing module header")
+                        .0;
+
+                    procs.push((id, proc))
+                }
+
+                procs
+            })
+            .collect();
+
+        let compilation = ProgramCompilation {
+            constants,
+            procedures,
+            source_map: SourceMap { },
+        };
+
+        Ok(compilation)
+    }
+}
+
+impl ConstantPool {
+    fn new() -> Self {
+        Self {
+            counter: utils::Counter::new(ir::Id(0)),
+            mapping: HashMap::new(),
+        }
+    }
+
+    fn get_or_allocate(&mut self, value: ir::ConstValue) -> ir::Id {
+        *self.mapping.entry(value)
+            .or_insert_with(|| {
+                self.counter.next().0
+            })
     }
 }
 
 impl ProcedurePrototype {
     pub fn from(proc: &ast::Procedure) -> ProcedurePrototype {
+        let name = proc.name.to_string();
         let signature = {
             let mut s = String::from(proc.name);
             s += " (";
@@ -223,48 +276,20 @@ impl ProcedurePrototype {
             s + ")"
         };
 
-        let description = {
-            let mut s = String::from("proc ");
-            s += proc.name;
-            s += " (";
-            for (i, elem) in proc.input_defn.elements.iter().enumerate() {
-                s += &format!("{}: {}", elem.name, elem.data_type.name);
-                if i < proc.input_defn.elements.len() - 1 {
-                    s += ", ";
-                }
-            }
-            s += ") -> (";
-            for (i, elem) in proc.return_defn.elements.iter().enumerate() {
-                s += &format!("{}: {}", elem.name, elem.data_type.name);
-                if i < proc.return_defn.elements.len() - 1 {
-                    s += ", ";
-                }
-            }
-            s + ")"
-        };
-
-        ProcedurePrototype {
-            name: String::from(proc.name),
-            signature,
-            description,
-        }
+        ProcedurePrototype { name, signature, }
     }
 }
 
-impl<'a> ImportMap<'a> {
-    pub fn empty() -> ImportMap<'a> {
-        ImportMap {
-            external_headers: &[],
-            local_headers: &[],
-            system_headers: &[],
-        }
+impl std::fmt::Display for ProcedurePrototype {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.signature)
     }
 }
 
 impl RegistorAllocator {
-    fn new() -> Self {
+    fn new(counter: utils::Counter<ir::Register>) -> Self {
         RegistorAllocator {
-            next_register: 0,
+            counter,
             lookup_table: HashMap::new(),
         }
     }
@@ -273,14 +298,13 @@ impl RegistorAllocator {
         if self.lookup_table.contains_key(identifier) {
             Err(())
         } else {
-            let reg = self.next_register;
+            let reg = self.counter.next().0;
             self.lookup_table.insert(identifier.to_string(), reg);
-            self.next_register += 1;
-            Ok(ir::Register(reg))
+            Ok(reg)
         }
     }
 
     fn lookup(&self, identifier: &str) -> Option<ir::Register> {
-        self.lookup_table.get(identifier).map(|r| ir::Register(*r))
+        self.lookup_table.get(identifier).map(|r| *r)
     }
 }

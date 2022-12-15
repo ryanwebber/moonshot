@@ -7,9 +7,6 @@ pub enum Instruction {
     Set(LVal, RVal),
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct Register(pub usize);
-
 pub enum LVal {
     Reg(RegExpr),
 }
@@ -19,6 +16,9 @@ pub enum RVal {
     Add(AddExpr),
     Const(ConstExpr),
 }
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub struct Register(pub usize);
 
 pub struct RegExpr {
     pub reg: Register,
@@ -32,7 +32,7 @@ pub struct AddExpr {
 }
 
 pub struct ConstExpr {
-    pub value: ConstValue,
+    pub id: Id,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -55,6 +55,18 @@ impl std::fmt::Display for DataMode {
         match self {
             Self::SP1 => write!(f, "SP1"),
         }
+    }
+}
+
+impl std::ops::AddAssign<usize> for Id {
+    fn add_assign(&mut self, rhs: usize) {
+        self.0 += rhs
+    }
+}
+
+impl std::ops::AddAssign<usize> for Register {
+    fn add_assign(&mut self, rhs: usize) {
+        self.0 += rhs
     }
 }
 
@@ -111,14 +123,16 @@ impl From<&ConstExpr> for sexpr::Value {
     fn from(v: &ConstExpr) -> Self {
         sexpr::Value::List(vec![
             sexpr::Value::Symbol(String::from("const")),
-            match &v.value {
-                ConstValue::Float { base, exponent, precision } => sexpr::Value::List(vec![
-                    match precision {
-                        Precision::Single => sexpr::Value::Symbol(DataMode::SP1.to_string()),
-                    },
-                    sexpr::Value::Symbol(format!("{} x 10^{}", base, exponent)),
-                ]),
-            },
+            sexpr::Value::from(v.id),
+        ])
+    }
+}
+
+impl From<Id> for sexpr::Value {
+    fn from(id: Id) -> Self {
+        sexpr::Value::List(vec![
+            sexpr::Value::Symbol(String::from("id")),
+            sexpr::Value::Number(format!("{}", id.0))
         ])
     }
 }

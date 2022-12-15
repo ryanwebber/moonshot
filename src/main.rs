@@ -7,6 +7,7 @@ pub mod parser;
 pub mod sexpr;
 pub mod tokenizer;
 pub mod types;
+pub mod utils;
 
 struct ReportableError {
     msg: String,
@@ -60,17 +61,24 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
     };
 
     let parse = parser::Parser::try_parse_all(&tokens)?;
+    let mut id_pool = utils::Counter(ir::Id(0));
+
     let modules = {
         let modules: Result<Vec<compiler::ModuleCompilation>, _> = parse
             .modules
             .iter()
-            .map(|m| compiler::Compiler::try_compile(m, &compiler::ImportMap::empty()))
+            .map(|module| {
+                compiler::Compiler::check_and_build_header(module, &mut id_pool)
+                    .map(|header| {
+                        compiler::Compiler::check_and_compile(module, header)
+                    })?
+            })
             .collect();
 
         modules?
     };
 
-    let program = compiler::Compiler::package_modules(&modules)?;
+    let program = compiler::Compiler::package_modules(modules)?;
     let contents = {
         let package = generator::Generator::try_generate(&program)?;
         indoc::formatdoc! {"
@@ -100,6 +108,7 @@ fn main() {
                 let abc: i15 = 78;
                 let x: i15 = (78 + 2);
                 let y: i15 = (x + 1);
+                let z: i15 = y;
             }
         }
 

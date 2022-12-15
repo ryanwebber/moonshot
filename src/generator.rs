@@ -8,8 +8,6 @@ use crate::ir;
 
 struct AssemblyGenerator<'a> {
     writer: AssemblyWriter<'a>,
-    slot_allocator: SlotAllocator,
-    workspace_registry: WorkspaceRegistry,
 }
 
 pub struct AssemblyPackage {
@@ -21,20 +19,13 @@ struct AssemblyWriter<'a> {
     target: &'a mut dyn SourceWritable,
     queued_labels: Vec<Label>,
 }
-
-struct ConstantPool {
-    mapping: HashMap<ir::ConstValue, Label>,
-}
-
-struct Counter(Id);
-
 pub enum GeneratorError {
     IoError(std::io::Error),
     LabelOverflow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct Id(usize);
+pub struct Id(usize);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Label {
@@ -44,7 +35,6 @@ pub struct Label {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum LabelType {
-    Bespoke,
     Const,
     Procedure,
     Stack,
@@ -57,33 +47,21 @@ struct Slot {
     offset: usize,
 }
 
-struct SlotAllocator {
-    constant_pool: ConstantPool,
-    bespoke_counter: Counter,
-}
-
 trait SourceWritable {
     fn erasable_stream(&mut self) -> &mut dyn std::io::Write;
     fn fixed_stream(&mut self) -> &mut dyn std::io::Write;
 }
 
-#[derive(Clone)]
-struct Workspace {
-    id: Id,
-}
-
 struct WorkspaceArtifact {/* information on stack */}
 
-struct WorkspaceContext {
+struct WorkspaceContext<'a> {
+    procedure: &'a compiler::ProcedureDefinition,
     stack: VirtualStack,
-    workspace: Workspace,
 }
 
-struct WorkspaceRegistry {
-    workspace_mapping: HashMap<Id, Workspace>,
+struct VirtualStack {
+    top: usize,
 }
-
-struct VirtualStack {}
 
 pub type WriterError = std::io::Error;
 
@@ -91,27 +69,62 @@ impl<'a> AssemblyGenerator<'a> {
     fn new(writer: AssemblyWriter<'a>) -> Self {
         Self {
             writer,
-            slot_allocator: SlotAllocator::new(),
-            workspace_registry: WorkspaceRegistry::new(),
         }
     }
 
     fn try_push_const_expr(&mut self, expr: &ir::ConstExpr) -> Result<(), GeneratorError> {
-        todo!()
+        let const_slot = Slot::from_const(expr.id);
+        self.writer
+            .write_instruction(agc::Instruction::CAF, None, |w| {
+                write!(w, "{}", const_slot)
+            })?;
+
+        Ok(())
     }
 
-    fn try_push_rval(&mut self, rval: &ir::RVal) -> Result<(), GeneratorError> {
+    fn try_push(
+        &mut self,
+        rval: &ir::RVal,
+        context: &mut WorkspaceContext,
+    ) -> Result<(), GeneratorError> {
+        let dest_slot = context.stack.push();
         match rval {
             ir::RVal::Add(expr) => {
-                todo!()
+                self.writer.write_comment("TODO: ADD EXPR")?;
+                Ok(())
             }
             ir::RVal::Const(expr) => {
-                todo!()
+                self.try_push_const_expr(expr)?;
+                self.writer
+                    .write_instruction(agc::Instruction::TS, None, |w| {
+                        write!(w, "{}", dest_slot)
+                    })?;
+
+                Ok(())
             }
             ir::RVal::Reg(expr) => {
-                todo!()
+                let source_reg = Slot::from_register(expr.reg);
+                self.writer
+                    .write_instruction(agc::Instruction::CAE, Some("LOAD REG"), |w| {
+                        write!(w, "{}", source_reg)
+                    })?;
+                
+                self.writer
+                    .write_instruction(agc::Instruction::TS, None, |w| {
+                        write!(w, "{}", dest_slot)
+                    })?;
+                
+                Ok(())
             }
         }
+    }
+
+    fn try_pop(&mut self, context: &mut WorkspaceContext) -> Result<Slot, GeneratorError> {
+        let slot = context.stack.pop();
+        self.writer
+            .write_instruction(agc::Instruction::CAE, None, |w| write!(w, "{}", slot))?;
+
+        Ok(slot)
     }
 
     fn try_generate_instruction(
@@ -120,27 +133,40 @@ impl<'a> AssemblyGenerator<'a> {
         context: &mut WorkspaceContext,
     ) -> Result<(), GeneratorError> {
         match instruction {
-            ir::Instruction::Set(lhs, rhs) => Ok(()),
+            ir::Instruction::Set(lhs, rhs) => {
+                let dest_slot = match lhs {
+                    ir::LVal::Reg(expr) => Slot::from_register(expr.reg),
+                };
+
+                self.try_push(rhs, context)?;
+                self.try_pop(context)?;
+                self.writer
+                    .write_instruction(agc::Instruction::TS, Some("ASSIGN"), |w| {
+                        write!(w, "{}", dest_slot)
+                    })?;
+
+                Ok(())
+            }
         }
     }
 
     fn try_generate_procedure(
         &mut self,
-        definition: &compiler::TopLevelDefinition<'_>,
-        workspace: &Workspace,
+        id: ir::Id,
+        procedure: &compiler::ProcedureDefinition,
     ) -> Result<WorkspaceArtifact, GeneratorError> {
-        let mut context = WorkspaceContext::new(workspace.clone());
+        let mut context = WorkspaceContext {
+            procedure,
+            stack: VirtualStack::new(),
+        };
 
-        self.writer.write_comment(&format!(
-            "{} : {}",
-            &definition.module.module_name, &definition.proc.prototype.description
-        ))?;
+        self.writer.write_comment(&format!("{}", procedure.prototype.signature))?;
 
         // Write the function label
-        self.writer.push_label(workspace.get_call_slot().label);
+        self.writer.push_label(Slot::from_procedure(id).label);
 
         // Generate the function body
-        for instruction in &definition.proc.body.instructions {
+        for instruction in &procedure.body.instructions {
             self.try_generate_instruction(instruction, &mut context)?;
         }
 
@@ -153,51 +179,34 @@ impl<'a> AssemblyGenerator<'a> {
 
     fn try_generate(
         &mut self,
-        program: &compiler::ProgramCompilation<'_>,
+        program: &compiler::ProgramCompilation,
     ) -> Result<(), GeneratorError> {
-        // Generate workspaces for definitions
-        for tld in &program.definitions {
-            self.workspace_registry.allocate_workspace(tld.id, tld.proc);
+
+        for (id, proc_def) in &program.procedures {
+            self.try_generate_procedure(*id, proc_def)?;
         }
-
-        // Generate code for definitions
-        for tld in &program.definitions {
-            let workspace = self
-                .workspace_registry
-                .lookup_workspace(tld.id)
-                .expect("Unable to find workspace for procedure")
-                .clone();
-
-            self.try_generate_procedure(tld, &workspace)?;
-        }
-
-        // In case there are any labels left and to guard agaist falling through to
-        // the constants block
-        let inf_loop_slot = self.slot_allocator.allocate_bespoke_slot();
-        self.writer.write_newline()?;
-        self.writer.write_comment("CODE SEGMENT TRAP")?;
-        self.writer.push_label(inf_loop_slot.label);
-        self.writer
-            .write_instruction(agc::Instruction::TC, None, |w| {
-                write!(w, "{}", inf_loop_slot)
-            })?;
 
         // Write the constant pool out
         self.writer.write_newline()?;
         self.writer.write_comment("CONSTANTS")?;
-        for (value, label) in &self.slot_allocator.constant_pool.mapping {
+        for (id, value) in &program.constants {
             match value {
                 ir::ConstValue::Float {
                     base,
                     exponent,
                     precision: ir::Precision::Single,
                 } => {
-                    self.writer.write_const(label, agc::Instruction::DEC, |w| {
+                    let slot = Slot::from_const(*id);
+                    self.writer.write_const(&slot.label, agc::Instruction::DEC, |w| {
                         write!(w, "{}.0 E{}", base, exponent)
                     })?;
                 }
             }
         }
+
+        // Write the workspace and stack slots out
+        self.writer.write_newline()?;
+        self.writer.write_comment("WORKSPACE")?;
 
         Ok(())
     }
@@ -310,33 +319,9 @@ impl<'a> AssemblyWriter<'a> {
     }
 }
 
-impl ConstantPool {
-    fn new() -> Self {
-        Self {
-            mapping: HashMap::new(),
-        }
-    }
-
-    fn get_or_allocate_label(&mut self, value: ir::ConstValue) -> Label {
-        if let Some(label) = self.mapping.get(&value) {
-            return *label;
-        }
-
-        todo!()
-    }
-}
-
-impl Counter {
-    fn post_increment(&mut self) -> Id {
-        let r = self.0.clone();
-        self.0 .0 += 1;
-        r
-    }
-}
-
 impl Generator {
     pub fn try_generate(
-        program: &compiler::ProgramCompilation<'_>,
+        program: &compiler::ProgramCompilation,
     ) -> Result<AssemblyPackage, GeneratorError> {
         struct InlineTarget<'a> {
             erasable_buf: &'a mut Vec<u8>,
@@ -387,6 +372,12 @@ impl From<ir::Id> for Id {
     }
 }
 
+impl From<ir::Register> for Id {
+    fn from(id: ir::Register) -> Self {
+        Self(id.0)
+    }
+}
+
 impl From<std::io::Error> for GeneratorError {
     fn from(e: std::io::Error) -> Self {
         GeneratorError::IoError(e)
@@ -396,14 +387,13 @@ impl From<std::io::Error> for GeneratorError {
 impl std::fmt::Display for Label {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let prefix: char = match self.kind {
-            LabelType::Bespoke => 'X',
             LabelType::Const => 'C',
             LabelType::Procedure => 'P',
             LabelType::Stack => 'S',
             LabelType::Workspace => 'W',
         };
 
-        write!(f, "{}{:0<7}", prefix, self.id.0)
+        write!(f, "{}{:0>7}", prefix, self.id.0)
     }
 }
 
@@ -413,94 +403,73 @@ impl std::fmt::Display for Slot {
     }
 }
 
-impl SlotAllocator {
-    fn new() -> Self {
-        Self {
-            constant_pool: ConstantPool::new(),
-            bespoke_counter: Counter(Id(0)),
-        }
-    }
-
-    fn allocate_bespoke_slot(&mut self) -> Slot {
+impl Slot {
+    fn from_const(id: ir::Id) -> Slot {
         Slot {
             label: Label {
-                id: self.bespoke_counter.post_increment(),
-                kind: LabelType::Bespoke,
+                id: Id::from(id),
+                kind: LabelType::Const,
             },
-            offset: 0,
+            offset: 0
         }
     }
 
-    fn allocate_constant_slot(&mut self, value: ir::ConstValue) -> Slot {
-        todo!()
-    }
-}
-
-impl Workspace {
-    fn new(id: Id, proc: &compiler::ProcedureDefinition) -> Self {
-        Self {
-            id
-        }
-    }
-
-    fn get_call_slot(&self) -> Slot {
+    fn from_procedure(id: ir::Id) -> Slot {
         Slot {
             label: Label {
-                id: self.id,
-                kind: LabelType::Procedure
+                id: Id::from(id),
+                kind: LabelType::Procedure,
             },
-            offset: 0,
+            offset: 0
         }
     }
 
-    fn get_register_slot(&self, register: ir::Register) -> Slot {
-        todo!()
+    fn from_register(id: ir::Register) -> Slot {
+        Slot {
+            label: Label {
+                id: Id::from(id),
+                kind: LabelType::Workspace,
+            },
+            offset: 0
+        }
     }
 }
 
 impl From<&VirtualStack> for WorkspaceArtifact {
     fn from(_: &VirtualStack) -> Self {
-        Self { }
+        Self {}
     }
 }
 
-impl WorkspaceContext {
-    fn new(workspace: Workspace) -> Self {
-        Self {
-            stack: VirtualStack::new(),
-            workspace: workspace,
-        }
-    }
-}
-
-impl WorkspaceRegistry {
-    fn new() -> Self {
-        Self {
-            workspace_mapping: HashMap::new(),
-        }
-    }
-
-    fn allocate_workspace(&mut self, id: ir::Id, proc: &compiler::ProcedureDefinition) {
-        let id = Id::from(id);
-        let workspace = Workspace::new(id, proc);
-        self.workspace_mapping.insert(id, workspace);
-    }
-
-    fn lookup_workspace(&mut self, id: ir::Id) -> Option<&Workspace> {
-        self.workspace_mapping.get(&Id::from(id))
-    }
+impl<'a> WorkspaceContext<'a> {
+    
 }
 
 impl VirtualStack {
     fn new() -> Self {
-        Self {}
+        Self { top: 0 }
     }
 
-    fn push() -> Slot {
-        todo!()
+    fn push(&mut self) -> Slot {
+        let offset = self.top;
+        self.top += 1;
+        Slot {
+            label: Label {
+                id: Id(0),
+                kind: LabelType::Stack,
+            },
+            offset,
+        }
     }
 
-    fn pop() -> Slot {
-        todo!()
+    fn pop(&mut self) -> Slot {
+        self.top -= 1;
+        Slot {
+            label: Label {
+                id: Id(0),
+                kind: LabelType::Stack,
+            },
+            offset: self.top,
+        }
     }
 }
