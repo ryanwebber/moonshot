@@ -61,17 +61,15 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
     };
 
     let parse = parser::Parser::try_parse_all(&tokens)?;
-    let mut id_pool = utils::Counter(ir::Id(0));
+    let mut ids = utils::Counter(ir::Id(0));
 
     let modules = {
         let modules: Result<Vec<compiler::ModuleCompilation>, _> = parse
             .modules
             .iter()
             .map(|module| {
-                compiler::Compiler::check_and_build_header(module, &mut id_pool)
-                    .map(|header| {
-                        compiler::Compiler::check_and_compile(module, header)
-                    })?
+                compiler::Compiler::check_and_build_header(module, &mut ids)
+                    .map(|header| compiler::Compiler::check_and_compile(module, header))?
             })
             .collect();
 
@@ -106,8 +104,8 @@ fn main() {
 
             proc main (x: i1, y: i2) -> (z: i3) {
                 let abc: i15 = 78;
-                let x: i15 = (78 + 2);
-                let y: i15 = (x + 1);
+                let x: i15 = (abc + 2);
+                let y: i15 = (1 + x);
                 let z: i15 = y;
             }
         }

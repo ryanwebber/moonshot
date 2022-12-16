@@ -18,7 +18,10 @@ pub enum RVal {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub struct Register(pub usize);
+pub struct Register {
+    pub id: Id,
+    pub offset: usize,
+}
 
 pub struct RegExpr {
     pub reg: Register,
@@ -37,7 +40,11 @@ pub struct ConstExpr {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConstValue {
-    Float { base: i32, exponent: i32, precision: Precision },
+    Float {
+        base: i32,
+        exponent: i32,
+        precision: Precision,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -58,13 +65,13 @@ impl std::fmt::Display for DataMode {
     }
 }
 
-impl std::ops::AddAssign<usize> for Id {
-    fn add_assign(&mut self, rhs: usize) {
-        self.0 += rhs
+impl std::fmt::Display for Id {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
-impl std::ops::AddAssign<usize> for Register {
+impl std::ops::AddAssign<usize> for Id {
     fn add_assign(&mut self, rhs: usize) {
         self.0 += rhs
     }
@@ -104,7 +111,8 @@ impl From<&RegExpr> for sexpr::Value {
     fn from(v: &RegExpr) -> Self {
         sexpr::Value::List(vec![
             sexpr::Value::Symbol(format!("reg:{:?}", v.mode)),
-            sexpr::Value::Number(format!("{}", v.reg.0)),
+            sexpr::Value::Symbol(format!("{}", v.reg.id.0)),
+            sexpr::Value::Symbol(format!("+{}", v.reg.offset)),
         ])
     }
 }
@@ -132,7 +140,7 @@ impl From<Id> for sexpr::Value {
     fn from(id: Id) -> Self {
         sexpr::Value::List(vec![
             sexpr::Value::Symbol(String::from("id")),
-            sexpr::Value::Number(format!("{}", id.0))
+            sexpr::Value::Number(format!("{}", id.0)),
         ])
     }
 }

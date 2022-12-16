@@ -3,7 +3,8 @@ use crate::compiler;
 use crate::ir;
 
 struct AssemblyGenerator<'a> {
-    writer: AssemblyWriter<'a>,
+    code: AssemblyWriter<'a>,
+    data: AssemblyWriter<'a>,
 }
 
 pub struct AssemblyPackage {
@@ -12,7 +13,7 @@ pub struct AssemblyPackage {
 }
 
 struct AssemblyWriter<'a> {
-    target: &'a mut dyn SourceWritable,
+    w: &'a mut dyn std::io::Write,
     queued_labels: Vec<Label>,
 }
 
@@ -46,11 +47,6 @@ struct Slot {
     offset: usize,
 }
 
-trait SourceWritable {
-    fn erasable_stream(&mut self) -> &mut dyn std::io::Write;
-    fn fixed_stream(&mut self) -> &mut dyn std::io::Write;
-}
-
 struct WorkspaceArtifact {/* information on stack */}
 
 struct WorkspaceContext {
@@ -64,18 +60,17 @@ struct VirtualStack {
 pub type WriterError = std::io::Error;
 
 impl<'a> AssemblyGenerator<'a> {
-    fn new(writer: AssemblyWriter<'a>) -> Self {
+    fn new(code_writer: AssemblyWriter<'a>, data_writer: AssemblyWriter<'a>) -> Self {
         Self {
-            writer,
+            code: code_writer,
+            data: data_writer,
         }
     }
 
     fn try_push_const_expr(&mut self, expr: &ir::ConstExpr) -> Result<(), GeneratorError> {
         let const_slot: Slot = Label::with(expr.id, LabelType::Const).into();
-        self.writer
-            .write_instruction(agc::Instruction::CAF, None, |w| {
-                write!(w, "{}", const_slot)
-            })?;
+        self.code
+            .write_instruction_with(agc::Instruction::CAF, None, |w| write!(w, "{}", const_slot))?;
 
         Ok(())
     }
@@ -87,31 +82,41 @@ impl<'a> AssemblyGenerator<'a> {
     ) -> Result<(), GeneratorError> {
         let dest_slot = context.stack.push();
         match rval {
-            ir::RVal::Add(..) => {
-                self.writer.write_comment("TODO: ADD EXPR")?;
+            ir::RVal::Add(expr) => {
+                self.try_push(&*expr.lhs, context)?;
+                self.try_push(&*expr.rhs, context)?;
+                self.try_pop(context)?;
+                self.code
+                    .write_instruction_with(agc::Instruction::ADS, None, |w| {
+                        write!(w, "{}", dest_slot)
+                    })?;
+
+                context.stack.top -= 1;
+
                 Ok(())
             }
             ir::RVal::Const(expr) => {
                 self.try_push_const_expr(expr)?;
-                self.writer
-                    .write_instruction(agc::Instruction::TS, None, |w| {
+                self.code
+                    .write_instruction_with(agc::Instruction::TS, None, |w| {
                         write!(w, "{}", dest_slot)
                     })?;
 
                 Ok(())
             }
             ir::RVal::Reg(expr) => {
-                let source_reg: Slot = Label::from(expr.reg).into();
-                self.writer
-                    .write_instruction(agc::Instruction::CAE, Some("LOAD REG"), |w| {
-                        write!(w, "{}", source_reg)
-                    })?;
-                
-                self.writer
-                    .write_instruction(agc::Instruction::TS, None, |w| {
+                let source_reg = Slot::from(expr.reg);
+                self.code.write_instruction_with(
+                    agc::Instruction::CAE,
+                    Some(&format!("A := R{}[{}]", expr.reg.id, expr.reg.offset)),
+                    |w| write!(w, "{}", source_reg),
+                )?;
+
+                self.code
+                    .write_instruction_with(agc::Instruction::TS, None, |w| {
                         write!(w, "{}", dest_slot)
                     })?;
-                
+
                 Ok(())
             }
         }
@@ -119,8 +124,8 @@ impl<'a> AssemblyGenerator<'a> {
 
     fn try_pop(&mut self, context: &mut WorkspaceContext) -> Result<Slot, GeneratorError> {
         let slot = context.stack.pop();
-        self.writer
-            .write_instruction(agc::Instruction::CAE, None, |w| write!(w, "{}", slot))?;
+        self.code
+            .write_instruction_with(agc::Instruction::CAE, None, |w| write!(w, "{}", slot))?;
 
         Ok(slot)
     }
@@ -132,16 +137,19 @@ impl<'a> AssemblyGenerator<'a> {
     ) -> Result<(), GeneratorError> {
         match instruction {
             ir::Instruction::Set(lhs, rhs) => {
-                let dest_slot: Slot = match lhs {
-                    ir::LVal::Reg(expr) => Label::from(expr.reg).into(),
+                let register = match lhs {
+                    ir::LVal::Reg(expr) => expr.reg,
                 };
+
+                let dest_slot = Slot::from(register);
 
                 self.try_push(rhs, context)?;
                 self.try_pop(context)?;
-                self.writer
-                    .write_instruction(agc::Instruction::TS, Some("ASSIGN"), |w| {
-                        write!(w, "{}", dest_slot)
-                    })?;
+                self.code.write_instruction_with(
+                    agc::Instruction::TS,
+                    Some(&format!("R{}[{}] := A", register.id, register.offset)),
+                    |w| write!(w, "{}", dest_slot),
+                )?;
 
                 Ok(())
             }
@@ -157,10 +165,11 @@ impl<'a> AssemblyGenerator<'a> {
             stack: VirtualStack::new(),
         };
 
-        self.writer.write_comment(&format!("{}", procedure.prototype.signature))?;
+        self.code
+            .write_comment_with(|w| write!(w, "{}", procedure.prototype.signature))?;
 
         // Write the function label
-        self.writer.push_label(Label::with(id, LabelType::Procedure));
+        self.code.push_label(Label::with(id, LabelType::Procedure));
 
         // Generate the function body
         for instruction in &procedure.body.instructions {
@@ -168,8 +177,8 @@ impl<'a> AssemblyGenerator<'a> {
         }
 
         // Finally, return
-        self.writer
-            .write_simple_instruction(agc::Instruction::RETURN, None)?;
+        self.code
+            .write_instruction(agc::Instruction::RETURN, None)?;
 
         Ok(WorkspaceArtifact::from(&context.stack))
     }
@@ -178,14 +187,14 @@ impl<'a> AssemblyGenerator<'a> {
         &mut self,
         program: &compiler::ProgramCompilation,
     ) -> Result<(), GeneratorError> {
-
         for (id, proc_def) in &program.procedures {
             self.try_generate_procedure(*id, proc_def)?;
         }
 
         // Write the constant pool out
-        self.writer.write_newline()?;
-        self.writer.write_comment("CONSTANTS")?;
+        self.code.write_newline()?;
+        self.code.write_comment("CONSTANTS")?;
+        self.code.write_newline()?;
         for (id, value) in &program.constants {
             match value {
                 ir::ConstValue::Float {
@@ -193,26 +202,46 @@ impl<'a> AssemblyGenerator<'a> {
                     exponent,
                     precision: ir::Precision::Single,
                 } => {
-                    let label = Label::with(*id, LabelType::Const);
-                    self.writer.write_const(&label, agc::Instruction::DEC, |w| {
-                        write!(w, "{}.0 E{}", base, exponent)
-                    })?;
+                    self.code.push_label(Label::with(*id, LabelType::Const));
+                    self.code
+                        .write_instruction_with(agc::Instruction::DEC, None, |w| {
+                            write!(w, "{}.0 E{}", base, exponent)
+                        })?;
                 }
             }
         }
 
         // Write the workspace and stack slots out
-        self.writer.write_newline()?;
-        self.writer.write_comment("WORKSPACE")?;
+        self.data.write_comment("WORKSPACES")?;
+        self.data.write_newline()?;
+
+        for (_, proc) in &program.procedures {
+            if !proc.layout.placeholders.is_empty() {
+                self.data
+                    .write_comment_with(|w| write!(w, "{}", proc.prototype.signature))?;
+                for placeholder in &proc.layout.placeholders {
+                    self.data.push_label(Label {
+                        id: Id::from(placeholder.id),
+                        kind: LabelType::Workspace,
+                    });
+
+                    self.data.write_instruction_with(
+                        agc::Instruction::ERASE,
+                        Some(&format!("R{}", placeholder.id)),
+                        |w| write!(w, "{}", placeholder.words - 1),
+                    )?;
+                }
+            }
+        }
 
         Ok(())
     }
 }
 
 impl<'a> AssemblyWriter<'a> {
-    fn new(target: &'a mut dyn SourceWritable) -> Self {
+    fn new(w: &'a mut dyn std::io::Write) -> Self {
         Self {
-            target,
+            w,
             queued_labels: Vec::new(),
         }
     }
@@ -228,10 +257,10 @@ impl<'a> AssemblyWriter<'a> {
             // more than one label. This won't won't work for constants or data, so
             // we'll use a different label strategy
             for label in rest {
-                write!(self.target.fixed_stream(), "{}\t\tNOOP\n", label)?;
+                write!(self.w, "{}\t\tNOOP\n", label)?;
             }
 
-            write!(self.target.fixed_stream(), "{}", last)?;
+            write!(self.w, "{}", last)?;
             self.queued_labels.clear();
             Ok(true)
         } else {
@@ -239,32 +268,25 @@ impl<'a> AssemblyWriter<'a> {
         }
     }
 
-    fn write_const<F>(
-        &mut self,
-        label: &Label,
-        instruction: agc::Instruction,
-        f: F,
-    ) -> Result<(), WriterError>
+    fn write_comment(&mut self, c: &str) -> Result<(), WriterError> {
+        write!(self.w, "# {}\n", c)
+    }
+
+    fn write_comment_with<F>(&mut self, f: F) -> Result<(), WriterError>
     where
         F: FnOnce(&mut dyn std::io::Write) -> Result<(), WriterError>,
     {
-        write!(self.target.fixed_stream(), "{}\t", &label)?;
-        write!(self.target.fixed_stream(), "{}\t", instruction)?;
-        f(self.target.fixed_stream())?;
-        write!(self.target.fixed_stream(), "\n")?;
-
+        write!(self.w, "# ")?;
+        f(self.w)?;
+        write!(self.w, "\n")?;
         Ok(())
     }
 
-    fn write_comment(&mut self, c: &str) -> Result<(), WriterError> {
-        write!(self.target.fixed_stream(), "# {}\n", c)
-    }
-
     fn write_newline(&mut self) -> Result<(), WriterError> {
-        write!(self.target.fixed_stream(), "\n")
+        write!(self.w, "\n")
     }
 
-    fn write_instruction<F>(
+    fn write_instruction_with<F>(
         &mut self,
         instruction: agc::Instruction,
         comment: Option<&str>,
@@ -274,60 +296,54 @@ impl<'a> AssemblyWriter<'a> {
         F: FnOnce(&mut dyn std::io::Write) -> Result<(), WriterError>,
     {
         if self.flush_labels()? {
-            write!(self.target.fixed_stream(), "\t")?;
+            write!(self.w, "\t")?;
         } else {
-            write!(self.target.fixed_stream(), "\t\t")?;
+            write!(self.w, "\t\t")?;
         }
 
-        write!(self.target.fixed_stream(), "{}\t", instruction)?;
-        f(self.target.fixed_stream())?;
+        write!(self.w, "{}\t", instruction)?;
+        f(self.w)?;
 
         if let Some(comment) = comment {
-            write!(self.target.fixed_stream(), "\t")?;
-            write!(self.target.fixed_stream(), "# {}", comment)?;
+            write!(self.w, "\t")?;
+            write!(self.w, "# {}", comment)?;
         }
 
-        write!(self.target.fixed_stream(), "\n")?;
+        write!(self.w, "\n")?;
 
         Ok(())
     }
 
-    fn write_simple_instruction(
+    fn write_instruction(
         &mut self,
         instruction: agc::Instruction,
         comment: Option<&str>,
     ) -> Result<(), WriterError> {
         if self.flush_labels()? {
-            write!(self.target.fixed_stream(), "\t")?;
+            write!(self.w, "\t")?;
         } else {
-            write!(self.target.fixed_stream(), "\t\t")?;
+            write!(self.w, "\t\t")?;
         }
 
-        write!(self.target.fixed_stream(), "{}", instruction)?;
+        write!(self.w, "{}", instruction)?;
 
         if let Some(comment) = comment {
-            write!(self.target.fixed_stream(), "\t")?;
-            write!(self.target.fixed_stream(), "# {}", comment)?;
+            write!(self.w, "\t")?;
+            write!(self.w, "# {}", comment)?;
         }
 
-        write!(self.target.fixed_stream(), "\n")?;
+        write!(self.w, "\n")?;
 
         Ok(())
     }
 }
 
-impl From<ir::Register> for Label {
-    fn from(reg: ir::Register) -> Self {
-        Label {
-            id: Id::from(reg),
-            kind: LabelType::Workspace,
-        }
-    }
-}
-
 impl Label {
     fn with(id: ir::Id, kind: LabelType) -> Label {
-        Label { id: Id::from(id), kind }
+        Label {
+            id: Id::from(id),
+            kind,
+        }
     }
 }
 
@@ -335,31 +351,13 @@ impl Generator {
     pub fn try_generate(
         program: &compiler::ProgramCompilation,
     ) -> Result<AssemblyPackage, GeneratorError> {
-        struct InlineTarget<'a> {
-            erasable_buf: &'a mut Vec<u8>,
-            fixed_buf: &'a mut Vec<u8>,
-        }
-
-        impl<'a> SourceWritable for InlineTarget<'a> {
-            fn erasable_stream(&mut self) -> &mut dyn std::io::Write {
-                self.erasable_buf
-            }
-
-            fn fixed_stream(&mut self) -> &mut dyn std::io::Write {
-                self.fixed_buf
-            }
-        }
 
         let mut erasable_buf = Vec::new();
         let mut fixed_buf = Vec::new();
 
-        let mut target = InlineTarget {
-            erasable_buf: &mut erasable_buf,
-            fixed_buf: &mut fixed_buf,
-        };
-
-        let writer = AssemblyWriter::new(&mut target);
-        let mut generator = AssemblyGenerator::new(writer);
+        let code_writer = AssemblyWriter::new(&mut fixed_buf);
+        let data_writer = AssemblyWriter::new(&mut erasable_buf);
+        let mut generator = AssemblyGenerator::new(code_writer, data_writer);
 
         generator.try_generate(program)?;
 
@@ -384,9 +382,15 @@ impl From<ir::Id> for Id {
     }
 }
 
-impl From<ir::Register> for Id {
-    fn from(id: ir::Register) -> Self {
-        Self(id.0)
+impl From<ir::Register> for Slot {
+    fn from(reg: ir::Register) -> Self {
+        Slot {
+            label: Label {
+                id: Id::from(reg.id),
+                kind: LabelType::Workspace,
+            },
+            offset: reg.offset,
+        }
     }
 }
 

@@ -30,7 +30,9 @@ pub struct ProcedureBody {
     pub instructions: Vec<ir::Instruction>,
 }
 
-pub struct ProcedureLayout {}
+pub struct ProcedureLayout {
+    pub placeholders: Vec<Placeholder>,
+}
 
 #[derive(Clone, Debug, PartialEq, Hash)]
 pub struct ProcedurePrototype {
@@ -39,8 +41,14 @@ pub struct ProcedurePrototype {
 }
 
 struct RegistorAllocator {
-    counter: utils::Counter<ir::Register>,
+    counter: utils::Counter<ir::Id>,
     lookup_table: HashMap<String, ir::Register>,
+    placeholders: Vec<Placeholder>
+}
+
+pub struct Placeholder {
+    pub id: ir::Id,
+    pub words: usize,
 }
 
 pub struct ModuleHeader {
@@ -63,19 +71,15 @@ pub struct ProgramCompilation {
 pub struct SourceMap {
 }
 
-struct State {
-    constant_pool: ConstantPool,
-    register_allocator: RegistorAllocator,
-}
-
 fn try_compile_expr(
     expr: &ast::Expression,
-    state: &mut State,
+    register_allocator: &mut RegistorAllocator,
+    constant_pool: &mut ConstantPool,
 ) -> Result<ir::RVal, CompilerError> {
     match expr {
         ast::Expression::BinOpExpression { lhs, op, rhs } => {
-            let lhs_ir = try_compile_expr(&*lhs, state)?;
-            let rhs_ir = try_compile_expr(&*rhs, state)?;
+            let lhs_ir = try_compile_expr(&*lhs, register_allocator, constant_pool)?;
+            let rhs_ir = try_compile_expr(&*rhs, register_allocator, constant_pool)?;
             match op {
                 ast::Operator::Addition => Ok(ir::RVal::Add(ir::AddExpr {
                     mode: ir::DataMode::SP1,
@@ -96,7 +100,7 @@ fn try_compile_expr(
                 precision: ir::Precision::Single,
             };
 
-            let const_id = state.constant_pool.get_or_allocate(const_value);
+            let const_id = constant_pool.get_or_allocate(const_value);
 
             Ok(ir::RVal::Const(ir::ConstExpr {
                 id: const_id,
@@ -108,7 +112,7 @@ fn try_compile_expr(
                 .first()
                 .expect("var access should have been parsed with at least one path component");
 
-            let reg = state.register_allocator.lookup(path_component).ok_or(CompilerError {
+            let reg = register_allocator.lookup(path_component).ok_or(CompilerError {
                 msg: format!("Use of undeclared variable '{}'", path_component),
             })?;
 
@@ -120,7 +124,7 @@ fn try_compile_expr(
     }
 }
 
-fn try_compile_proc<'a>(proc: &ast::Procedure<'a>, state: &mut State) -> Result<ProcedureBody, CompilerError> {
+fn try_compile_proc<'a>(proc: &ast::Procedure<'a>, register_allocator: &mut RegistorAllocator, constant_pool: &mut ConstantPool) -> Result<ProcedureBody, CompilerError> {
     let mut instructions: Vec<ir::Instruction> = Vec::new();
 
     for statement in &proc.block.statements {
@@ -128,7 +132,7 @@ fn try_compile_proc<'a>(proc: &ast::Procedure<'a>, state: &mut State) -> Result<
             ast::Statement::Definition {
                 expression, name, ..
             } => {
-                let reg = state.register_allocator
+                let reg = register_allocator
                     .try_allocate_unused(name)
                     .map_err(|_| CompilerError {
                         msg: format!("Variable '{}' already defined", name),
@@ -139,7 +143,7 @@ fn try_compile_proc<'a>(proc: &ast::Procedure<'a>, state: &mut State) -> Result<
                     mode: ir::DataMode::SP1,
                 };
 
-                let expr_ir = try_compile_expr(expression, state)?;
+                let expr_ir = try_compile_expr(expression, register_allocator, constant_pool)?;
                 let set_inst = ir::Instruction::Set(ir::LVal::Reg(dest_reg_expr), expr_ir);
                 instructions.push(set_inst);
             }
@@ -158,7 +162,7 @@ impl Compiler {
 
     pub fn check_and_build_header<'a>(
         module: &ast::Module<'a>,
-        id_pool: &mut utils::Counter<ir::Id>
+        ids: &mut dyn utils::IdentifierAllocator<ir::Id>
     ) -> Result<ModuleHeader, CompilerError> {
         let mut header = ModuleHeader {
             procedures: HashMap::new(),
@@ -166,7 +170,7 @@ impl Compiler {
 
         for proc in &module.procs {
             let prototype = ProcedurePrototype::from(proc);
-            let id = id_pool.next().0;
+            let id = ids.generate_id();
             header.procedures.insert(prototype.signature.clone(), (id, prototype));
         }
 
@@ -178,19 +182,17 @@ impl Compiler {
         header: ModuleHeader,
     ) -> Result<ModuleCompilation, CompilerError> {
 
-        // TODO: Figure out how to deal with multiple procs
-        let mut state = State {
-            constant_pool: ConstantPool::new(),
-            register_allocator: RegistorAllocator::new(Counter::new(ir::Register(0)))
-        };
-
+        let mut constant_pool = ConstantPool::new();
         let procedures: Result<Vec<_>, CompilerError> = module
             .procs
             .iter()
             .map(|proc| {
-                let body = try_compile_proc(proc, &mut state)?;
-                let layout = ProcedureLayout {};
+                let mut register_allocator = RegistorAllocator::new(Counter::new(ir::Id(0)));
+                let body = try_compile_proc(proc, &mut register_allocator, &mut constant_pool)?;
                 let prototype = ProcedurePrototype::from(proc);
+                let layout = ProcedureLayout {
+                    placeholders: register_allocator.placeholders,
+                };
 
                 Ok(ProcedureDefinition {
                     body,
@@ -201,7 +203,7 @@ impl Compiler {
             .collect();
 
         Ok(ModuleCompilation {
-            constants: state.constant_pool.mapping,
+            constants: constant_pool.mapping,
             header,
             module_name: String::from(module.name),
             procedures: procedures?,
@@ -286,10 +288,11 @@ impl std::fmt::Display for ProcedurePrototype {
 }
 
 impl RegistorAllocator {
-    fn new(counter: utils::Counter<ir::Register>) -> Self {
+    fn new(counter: utils::Counter<ir::Id>) -> Self {
         RegistorAllocator {
             counter,
             lookup_table: HashMap::new(),
+            placeholders: Vec::new(),
         }
     }
 
@@ -297,8 +300,19 @@ impl RegistorAllocator {
         if self.lookup_table.contains_key(identifier) {
             Err(())
         } else {
-            let reg = self.counter.next().0;
+            // TODO: Support registers of different size
+            let id = self.counter.next().0;
+            let reg = ir::Register {
+                id,
+                offset: 0,
+            };
+
             self.lookup_table.insert(identifier.to_string(), reg);
+            self.placeholders.push(Placeholder {
+                id,
+                words: 1,
+            });
+
             Ok(reg)
         }
     }
