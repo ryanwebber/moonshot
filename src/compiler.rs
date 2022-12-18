@@ -64,11 +64,8 @@ pub struct ModuleCompilation {
 
 pub struct ProgramCompilation {
     pub constants: HashMap<ir::Id, ir::ConstValue>,
+    pub main_proc: ir::Id,
     pub procedures: Vec<(ir::Id, ProcedureDefinition)>,
-    pub source_map: SourceMap,
-}
-
-pub struct SourceMap {
 }
 
 fn try_compile_expr(
@@ -239,10 +236,13 @@ impl Compiler {
             })
             .collect();
 
+        // TODO: Find the main proc
+        let main_proc = ir::Id(0);
+
         let compilation = ProgramCompilation {
             constants,
+            main_proc,
             procedures,
-            source_map: SourceMap { },
         };
 
         Ok(compilation)

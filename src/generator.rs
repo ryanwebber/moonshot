@@ -1,6 +1,7 @@
 use crate::agc;
 use crate::compiler;
 use crate::ir;
+use crate::utils;
 
 struct AssemblyGenerator<'a> {
     code: AssemblyWriter<'a>,
@@ -187,9 +188,23 @@ impl<'a> AssemblyGenerator<'a> {
         &mut self,
         program: &compiler::ProgramCompilation,
     ) -> Result<(), GeneratorError> {
+        // Write out the procedure code
         for (id, proc_def) in &program.procedures {
             self.try_generate_procedure(*id, proc_def)?;
         }
+
+        // Write out main
+        self.code.write_newline()?;
+        write!(
+            self.code.w,
+            "MAIN\t\t=\t{}\n",
+            Label {
+                id: Id::from(program.main_proc),
+                kind: LabelType::Procedure
+            }
+        )?;
+
+        self.code.write_newline()?;
 
         // Write the constant pool out
         self.code.write_newline()?;
@@ -253,11 +268,9 @@ impl<'a> AssemblyWriter<'a> {
     fn flush_labels(&mut self) -> Result<bool, WriterError> {
         if let Some((last, rest)) = self.queued_labels.split_last() {
             // Labels have to be followed by instructions or weird stuff can happen
-            // (segfaults in the yaAGC). So, we add some NOOP instructions if we have
-            // more than one label. This won't won't work for constants or data, so
-            // we'll use a different label strategy
+            // (segfaults in the yaAGC), so we make use of the '=' pseudo op here
             for label in rest {
-                write!(self.w, "{}\t\tNOOP\n", label)?;
+                write!(self.w, "{}\t=\t{}\n", label, last)?;
             }
 
             write!(self.w, "{}", last)?;
@@ -351,9 +364,8 @@ impl Generator {
     pub fn try_generate(
         program: &compiler::ProgramCompilation,
     ) -> Result<AssemblyPackage, GeneratorError> {
-
-        let mut erasable_buf = Vec::new();
-        let mut fixed_buf = Vec::new();
+        let mut erasable_buf = utils::StringWriter::new();
+        let mut fixed_buf = utils::StringWriter::new();
 
         let code_writer = AssemblyWriter::new(&mut fixed_buf);
         let data_writer = AssemblyWriter::new(&mut erasable_buf);
@@ -361,11 +373,13 @@ impl Generator {
 
         generator.try_generate(program)?;
 
-        let erasable_source = std::str::from_utf8(erasable_buf.as_slice())
+        let erasable_source = erasable_buf
+            .as_str()
             .expect("Unable to unwrap buffer as string")
             .to_string();
 
-        let fixed_source = std::str::from_utf8(fixed_buf.as_slice())
+        let fixed_source = fixed_buf
+            .as_str()
             .expect("Unable to unwrap buffer as string")
             .to_string();
 
@@ -457,5 +471,20 @@ impl VirtualStack {
             },
             offset: self.top,
         }
+    }
+}
+
+impl AssemblyPackage {
+    pub fn to_yul_assembly(&self) -> Result<String, WriterError> {
+        utils::StringWriter::with(|f| {
+            use std::io::Write;
+            write!(
+                f,
+                std::include_str!("embed.agc.in"),
+                code = &self.fixed_source,
+                data = &self.erasable_source,
+                entrypoint = "MAIN"
+            )
+        })
     }
 }

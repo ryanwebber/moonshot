@@ -77,20 +77,19 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
     };
 
     let program = compiler::Compiler::package_modules(modules)?;
-    let contents = {
-        let package = generator::Generator::try_generate(&program)?;
-        indoc::formatdoc! {"
-            # === FIXED MEMORY ===
 
-            {}
-
-            # === ERASABLE MEMORY ===
-
-            {}
-            ",
-            &package.fixed_source,
-            &package.erasable_source,
+    for (id, procdef) in &program.procedures {
+        println!("[{}] {} {{", id, procdef.prototype.signature);
+        for instruction in &procdef.body.instructions {
+            println!("\t{}", sexpr::Value::from(instruction));
         }
+        println!("}}\n");
+    }
+
+    let contents = {
+        generator::Generator::try_generate(&program)?
+            .to_yul_assembly()
+            .expect("Unable to generate assembly source due to internal error")
     };
 
     Ok(contents)
