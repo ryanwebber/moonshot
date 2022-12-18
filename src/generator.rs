@@ -1,21 +1,30 @@
 use crate::agc;
 use crate::compiler;
 use crate::ir;
+use crate::optimizer;
 use crate::utils;
 
+use std::io::Write;
+
+enum AssemblyEntry {
+    Comment(String),
+    Instruction(agc::Instruction, Option<Slot>),
+    Label(Label),
+    Raw(Vec<String>),
+}
+
 struct AssemblyGenerator<'a> {
-    code: AssemblyWriter<'a>,
-    data: AssemblyWriter<'a>,
+    code: &'a mut AssemblyWriter,
+    data: &'a mut AssemblyWriter,
 }
 
 pub struct AssemblyPackage {
-    pub erasable_source: String,
-    pub fixed_source: String,
+    erasable_source: Vec<AssemblyEntry>,
+    fixed_source: Vec<AssemblyEntry>,
 }
 
-struct AssemblyWriter<'a> {
-    w: &'a mut dyn std::io::Write,
-    queued_labels: Vec<Label>,
+struct AssemblyWriter {
+    buf: Vec<AssemblyEntry>,
 }
 
 pub struct Generator;
@@ -61,7 +70,7 @@ struct VirtualStack {
 pub type WriterError = std::io::Error;
 
 impl<'a> AssemblyGenerator<'a> {
-    fn new(code_writer: AssemblyWriter<'a>, data_writer: AssemblyWriter<'a>) -> Self {
+    fn new(code_writer: &'a mut AssemblyWriter, data_writer: &'a mut AssemblyWriter) -> Self {
         Self {
             code: code_writer,
             data: data_writer,
@@ -71,8 +80,7 @@ impl<'a> AssemblyGenerator<'a> {
     fn try_push_const_expr(&mut self, expr: &ir::ConstExpr) -> Result<(), GeneratorError> {
         let const_slot: Slot = Label::with(expr.id, LabelType::Const).into();
         self.code
-            .write_instruction_with(agc::Instruction::CAF, None, |w| write!(w, "{}", const_slot))?;
-
+            .push_instruction(agc::Instruction::CAF, Some(const_slot));
         Ok(())
     }
 
@@ -88,10 +96,7 @@ impl<'a> AssemblyGenerator<'a> {
                 self.try_push(&*expr.rhs, context)?;
                 self.try_pop(context)?;
                 self.code
-                    .write_instruction_with(agc::Instruction::ADS, None, |w| {
-                        write!(w, "{}", dest_slot)
-                    })?;
-
+                    .push_instruction(agc::Instruction::ADS, Some(dest_slot));
                 context.stack.top -= 1;
 
                 Ok(())
@@ -99,25 +104,15 @@ impl<'a> AssemblyGenerator<'a> {
             ir::RVal::Const(expr) => {
                 self.try_push_const_expr(expr)?;
                 self.code
-                    .write_instruction_with(agc::Instruction::TS, None, |w| {
-                        write!(w, "{}", dest_slot)
-                    })?;
-
+                    .push_instruction(agc::Instruction::TS, Some(dest_slot));
                 Ok(())
             }
             ir::RVal::Reg(expr) => {
-                let source_reg = Slot::from(expr.reg);
-                self.code.write_instruction_with(
-                    agc::Instruction::CAE,
-                    Some(&format!("A := R{}[{}]", expr.reg.id, expr.reg.offset)),
-                    |w| write!(w, "{}", source_reg),
-                )?;
-
+                let source_slot = Slot::from(expr.reg);
                 self.code
-                    .write_instruction_with(agc::Instruction::TS, None, |w| {
-                        write!(w, "{}", dest_slot)
-                    })?;
-
+                    .push_instruction(agc::Instruction::CAE, Some(source_slot));
+                self.code
+                    .push_instruction(agc::Instruction::TS, Some(dest_slot));
                 Ok(())
             }
         }
@@ -126,8 +121,7 @@ impl<'a> AssemblyGenerator<'a> {
     fn try_pop(&mut self, context: &mut WorkspaceContext) -> Result<Slot, GeneratorError> {
         let slot = context.stack.pop();
         self.code
-            .write_instruction_with(agc::Instruction::CAE, None, |w| write!(w, "{}", slot))?;
-
+            .push_instruction(agc::Instruction::CAE, Some(slot.clone()));
         Ok(slot)
     }
 
@@ -143,14 +137,10 @@ impl<'a> AssemblyGenerator<'a> {
                 };
 
                 let dest_slot = Slot::from(register);
-
                 self.try_push(rhs, context)?;
                 self.try_pop(context)?;
-                self.code.write_instruction_with(
-                    agc::Instruction::TS,
-                    Some(&format!("R{}[{}] := A", register.id, register.offset)),
-                    |w| write!(w, "{}", dest_slot),
-                )?;
+                self.code
+                    .push_instruction(agc::Instruction::TS, Some(dest_slot));
 
                 Ok(())
             }
@@ -167,7 +157,7 @@ impl<'a> AssemblyGenerator<'a> {
         };
 
         self.code
-            .write_comment_with(|w| write!(w, "{}", procedure.prototype.signature))?;
+            .push_comment(format!("{}", procedure.prototype.signature));
 
         // Write the function label
         self.code.push_label(Label::with(id, LabelType::Procedure));
@@ -178,8 +168,7 @@ impl<'a> AssemblyGenerator<'a> {
         }
 
         // Finally, return
-        self.code
-            .write_instruction(agc::Instruction::RETURN, None)?;
+        self.code.push_instruction(agc::Instruction::RETURN, None);
 
         Ok(WorkspaceArtifact::from(&context.stack))
     }
@@ -194,22 +183,23 @@ impl<'a> AssemblyGenerator<'a> {
         }
 
         // Write out main
-        self.code.write_newline()?;
-        write!(
-            self.code.w,
-            "MAIN\t\t=\t{}\n",
+        self.code.push_break();
+        self.code.push_columns(vec![
+            String::from("MAIN"),
+            String::from("="),
             Label {
                 id: Id::from(program.main_proc),
-                kind: LabelType::Procedure
+                kind: LabelType::Procedure,
             }
-        )?;
+            .to_string(),
+        ]);
 
-        self.code.write_newline()?;
+        self.code.push_break();
 
         // Write the constant pool out
-        self.code.write_newline()?;
-        self.code.write_comment("CONSTANTS")?;
-        self.code.write_newline()?;
+        self.code.push_break();
+        self.code.push_comment(String::from("CONSTANTS"));
+        self.code.push_break();
         for (id, value) in &program.constants {
             match value {
                 ir::ConstValue::Float {
@@ -217,34 +207,32 @@ impl<'a> AssemblyGenerator<'a> {
                     exponent,
                     precision: ir::Precision::Single,
                 } => {
-                    self.code.push_label(Label::with(*id, LabelType::Const));
-                    self.code
-                        .write_instruction_with(agc::Instruction::DEC, None, |w| {
-                            write!(w, "{}.0 E{}", base, exponent)
-                        })?;
+                    self.code.push_columns(vec![
+                        Label::with(*id, LabelType::Const).to_string(),
+                        String::from("DEC"),
+                        format!("{}.0 E{}", base, exponent),
+                    ]);
                 }
             }
         }
 
         // Write the workspace and stack slots out
-        self.data.write_comment("WORKSPACES")?;
-        self.data.write_newline()?;
+        self.data.push_comment(String::from("WORKSPACES"));
+        self.data.push_break();
 
         for (_, proc) in &program.procedures {
             if !proc.layout.placeholders.is_empty() {
-                self.data
-                    .write_comment_with(|w| write!(w, "{}", proc.prototype.signature))?;
+                self.data.push_comment(proc.prototype.signature.clone());
                 for placeholder in &proc.layout.placeholders {
-                    self.data.push_label(Label {
-                        id: Id::from(placeholder.id),
-                        kind: LabelType::Workspace,
-                    });
-
-                    self.data.write_instruction_with(
-                        agc::Instruction::ERASE,
-                        Some(&format!("R{}", placeholder.id)),
-                        |w| write!(w, "{}", placeholder.words - 1),
-                    )?;
+                    self.data.push_columns(vec![
+                        Label {
+                            id: Id::from(placeholder.id),
+                            kind: LabelType::Workspace,
+                        }
+                        .to_string(),
+                        agc::Instruction::ERASE.to_string(),
+                        format!("{}", placeholder.words - 1),
+                    ]);
                 }
             }
         }
@@ -253,101 +241,30 @@ impl<'a> AssemblyGenerator<'a> {
     }
 }
 
-impl<'a> AssemblyWriter<'a> {
-    fn new(w: &'a mut dyn std::io::Write) -> Self {
-        Self {
-            w,
-            queued_labels: Vec::new(),
-        }
+impl AssemblyWriter {
+    fn new() -> Self {
+        Self { buf: Vec::new() }
+    }
+
+    fn push_break(&mut self) {
+        self.buf.push(AssemblyEntry::Raw(Vec::new()));
+    }
+
+    fn push_comment(&mut self, comment: String) {
+        self.buf.push(AssemblyEntry::Comment(comment));
+    }
+
+    fn push_columns(&mut self, columns: Vec<String>) {
+        self.buf.push(AssemblyEntry::Raw(columns));
+    }
+
+    fn push_instruction(&mut self, instruction: agc::Instruction, operand: Option<Slot>) {
+        self.buf
+            .push(AssemblyEntry::Instruction(instruction, operand));
     }
 
     fn push_label(&mut self, label: Label) {
-        self.queued_labels.push(label);
-    }
-
-    fn flush_labels(&mut self) -> Result<bool, WriterError> {
-        if let Some((last, rest)) = self.queued_labels.split_last() {
-            // Labels have to be followed by instructions or weird stuff can happen
-            // (segfaults in the yaAGC), so we make use of the '=' pseudo op here
-            for label in rest {
-                write!(self.w, "{}\t=\t{}\n", label, last)?;
-            }
-
-            write!(self.w, "{}", last)?;
-            self.queued_labels.clear();
-            Ok(true)
-        } else {
-            Ok(false)
-        }
-    }
-
-    fn write_comment(&mut self, c: &str) -> Result<(), WriterError> {
-        write!(self.w, "# {}\n", c)
-    }
-
-    fn write_comment_with<F>(&mut self, f: F) -> Result<(), WriterError>
-    where
-        F: FnOnce(&mut dyn std::io::Write) -> Result<(), WriterError>,
-    {
-        write!(self.w, "# ")?;
-        f(self.w)?;
-        write!(self.w, "\n")?;
-        Ok(())
-    }
-
-    fn write_newline(&mut self) -> Result<(), WriterError> {
-        write!(self.w, "\n")
-    }
-
-    fn write_instruction_with<F>(
-        &mut self,
-        instruction: agc::Instruction,
-        comment: Option<&str>,
-        f: F,
-    ) -> Result<(), WriterError>
-    where
-        F: FnOnce(&mut dyn std::io::Write) -> Result<(), WriterError>,
-    {
-        if self.flush_labels()? {
-            write!(self.w, "\t")?;
-        } else {
-            write!(self.w, "\t\t")?;
-        }
-
-        write!(self.w, "{}\t", instruction)?;
-        f(self.w)?;
-
-        if let Some(comment) = comment {
-            write!(self.w, "\t")?;
-            write!(self.w, "# {}", comment)?;
-        }
-
-        write!(self.w, "\n")?;
-
-        Ok(())
-    }
-
-    fn write_instruction(
-        &mut self,
-        instruction: agc::Instruction,
-        comment: Option<&str>,
-    ) -> Result<(), WriterError> {
-        if self.flush_labels()? {
-            write!(self.w, "\t")?;
-        } else {
-            write!(self.w, "\t\t")?;
-        }
-
-        write!(self.w, "{}", instruction)?;
-
-        if let Some(comment) = comment {
-            write!(self.w, "\t")?;
-            write!(self.w, "# {}", comment)?;
-        }
-
-        write!(self.w, "\n")?;
-
-        Ok(())
+        self.buf.push(AssemblyEntry::Label(label));
     }
 }
 
@@ -364,28 +281,15 @@ impl Generator {
     pub fn try_generate(
         program: &compiler::ProgramCompilation,
     ) -> Result<AssemblyPackage, GeneratorError> {
-        let mut erasable_buf = utils::StringWriter::new();
-        let mut fixed_buf = utils::StringWriter::new();
-
-        let code_writer = AssemblyWriter::new(&mut fixed_buf);
-        let data_writer = AssemblyWriter::new(&mut erasable_buf);
-        let mut generator = AssemblyGenerator::new(code_writer, data_writer);
+        let mut code_writer = AssemblyWriter::new();
+        let mut data_writer = AssemblyWriter::new();
+        let mut generator = AssemblyGenerator::new(&mut code_writer, &mut data_writer);
 
         generator.try_generate(program)?;
 
-        let erasable_source = erasable_buf
-            .as_str()
-            .expect("Unable to unwrap buffer as string")
-            .to_string();
-
-        let fixed_source = fixed_buf
-            .as_str()
-            .expect("Unable to unwrap buffer as string")
-            .to_string();
-
         Ok(AssemblyPackage {
-            erasable_source,
-            fixed_source,
+            erasable_source: data_writer.buf,
+            fixed_source: code_writer.buf,
         })
     }
 }
@@ -474,15 +378,129 @@ impl VirtualStack {
     }
 }
 
+impl optimizer::Instruction for AssemblyEntry {
+    fn is_code_instruction(&self) -> bool {
+        match self {
+            AssemblyEntry::Instruction(..) => true,
+            _ => false,
+        }
+    }
+
+    fn is_redundant(pair: (&Self, &Self)) -> bool {
+        match pair {
+            (
+                AssemblyEntry::Instruction(agc::Instruction::TS, store_slot),
+                AssemblyEntry::Instruction(agc::Instruction::CAE, load_slot),
+            ) => store_slot == load_slot, // <SLOT> := A followed by A := <SLOT>
+            _ => false,
+        }
+    }
+}
+
 impl AssemblyPackage {
-    pub fn to_yul_assembly(&self) -> Result<String, WriterError> {
+    fn flush_labels(
+        f: &mut utils::StringWriter,
+        labels: &mut Vec<Label>,
+    ) -> Result<bool, WriterError> {
+        if let Some((last, rest)) = labels.split_last() {
+            // Labels have to be followed by instructions or weird stuff can happen
+            // (segfaults in the yaAGC), so we make use of the '=' pseudo op here
+            for label in rest {
+                write!(f, "{}\t=\t{}\n", label, last)?;
+            }
+
+            write!(f, "{}", last)?;
+            labels.clear();
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn to_assembly_string(source: &Vec<AssemblyEntry>) -> Result<String, WriterError> {
         utils::StringWriter::with(|f| {
-            use std::io::Write;
+            let mut buffered_labels: Vec<Label> = Vec::new();
+
+            for entry in source {
+                match entry {
+                    AssemblyEntry::Comment(comment) => {
+                        write!(f, "# {}\n", comment)?;
+                    }
+                    AssemblyEntry::Instruction(instr, Some(slot)) => {
+                        if Self::flush_labels(f, &mut buffered_labels)? {
+                            write!(f, "\t")?;
+                        } else {
+                            write!(f, "\t\t")?;
+                        }
+
+                        write!(f, "{}\t{}\n", instr, slot)?;
+                    }
+                    AssemblyEntry::Instruction(instr, ..) => {
+                        if Self::flush_labels(f, &mut buffered_labels)? {
+                            write!(f, "\t")?;
+                        } else {
+                            write!(f, "\t\t")?;
+                        }
+
+                        write!(f, "{}\n", instr)?;
+                    }
+                    AssemblyEntry::Label(label) => {
+                        buffered_labels.push(*label);
+                    }
+                    AssemblyEntry::Raw(columns) => {
+                        let tabs = if let Some(label) = columns.first() {
+                            write!(f, "{}", label)?;
+                            if label.len() < 8 {
+                                2
+                            } else {
+                                1
+                            }
+                        } else {
+                            2
+                        };
+
+                        if let Some(instruction) = columns.get(1) {
+                            for _ in 0..tabs {
+                                write!(f, "\t")?;
+                            }
+
+                            write!(f, "{}", instruction)?;
+                        }
+
+                        if columns.len() > 2 {
+                            write!(f, "\t")?;
+                            for (i, operand) in columns.iter().skip(2).enumerate() {
+                                if i > 0 {
+                                    write!(f, " ")?;
+                                }
+
+                                write!(f, "{}", operand)?;
+                            }
+                        }
+
+                        write!(f, "\n")?;
+                    }
+                }
+            }
+
+            Ok(())
+        })
+    }
+
+    pub fn release_to_yul_assembly(self) -> Result<String, WriterError> {
+        utils::StringWriter::with(|f| {
+            let raw_fixed_instrs = self.fixed_source;
+            let raw_erasable_instrs = self.erasable_source;
+            let optimized_fixed_instrs = optimizer::optimize(raw_fixed_instrs);
+
+            let fixed_source_str = Self::to_assembly_string(&optimized_fixed_instrs)?;
+            let erasable_source_str = Self::to_assembly_string(&raw_erasable_instrs)?;
+
             write!(
                 f,
                 std::include_str!("embed.agc.in"),
-                code = &self.fixed_source,
-                data = &self.erasable_source,
+                code = &fixed_source_str,
+                data = &erasable_source_str,
                 entrypoint = "MAIN"
             )
         })

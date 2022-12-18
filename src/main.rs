@@ -3,6 +3,7 @@ pub mod ast;
 pub mod compiler;
 pub mod generator;
 pub mod ir;
+pub mod optimizer;
 pub mod parser;
 pub mod sexpr;
 pub mod tokenizer;
@@ -88,7 +89,7 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
 
     let contents = {
         generator::Generator::try_generate(&program)?
-            .to_yul_assembly()
+            .release_to_yul_assembly()
             .expect("Unable to generate assembly source due to internal error")
     };
 
@@ -107,9 +108,10 @@ fn main() {
                 let y: i15 = (1 + x);
                 let z: i15 = y;
             }
-        }
 
-        module dsky {
+            proc foo () -> () {
+                let k: i15 = 0;
+            }
         }
     "#};
 

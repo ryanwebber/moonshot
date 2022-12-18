@@ -212,12 +212,11 @@ impl Compiler {
     ) -> Result<ProgramCompilation, PackagingError> {
 
         // Copy constants
-        let mut constants = HashMap::new();
-        for module in &modules {
-            for (a, b) in &module.constants {
-                constants.insert(*b, a.clone());
-            }
-        }
+        let constants: HashMap<ir::Id, ir::ConstValue> = modules
+            .iter()
+            .flat_map(|m| m.constants.iter())
+            .map(|(a, b)| (b.clone(), *a))
+            .collect();
 
         // Copy procedures
         let procedures: Vec<_> = modules.into_iter()
