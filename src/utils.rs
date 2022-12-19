@@ -1,8 +1,13 @@
-use std::str::Utf8Error;
+use std::{ops::AddAssign, str::Utf8Error};
 
-pub struct Counter<T>(pub T) where T: std::ops::AddAssign<usize> + Clone;
+pub struct Counter<T>(pub T)
+where
+    T: std::ops::AddAssign<usize> + Clone;
 
-impl<T> Counter<T> where T: std::ops::AddAssign<usize> + Clone {
+impl<T> Counter<T>
+where
+    T: std::ops::AddAssign<usize> + Clone,
+{
     pub fn new(value: T) -> Self {
         Self(value)
     }
@@ -11,10 +16,22 @@ impl<T> Counter<T> where T: std::ops::AddAssign<usize> + Clone {
         let n = Self(self.0.clone());
         self.0 += 1;
         n
-    }    
+    }
 }
 
-impl<T> Clone for Counter<T> where T: std::ops::AddAssign<usize> + Clone {
+impl<T> AddAssign<usize> for Counter<T>
+where
+    T: std::ops::AddAssign<usize> + Clone,
+{
+    fn add_assign(&mut self, rhs: usize) {
+        self.0 += rhs;
+    }
+}
+
+impl<T> Clone for Counter<T>
+where
+    T: std::ops::AddAssign<usize> + Clone,
+{
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
@@ -24,14 +41,17 @@ pub trait IdentifierAllocator<T> {
     fn generate_id(&mut self) -> T;
 }
 
-impl<T> IdentifierAllocator<T> for Counter<T> where T: std::ops::AddAssign<usize> + Clone {
+impl<T> IdentifierAllocator<T> for Counter<T>
+where
+    T: std::ops::AddAssign<usize> + Clone,
+{
     fn generate_id(&mut self) -> T {
         self.next().0
     }
 }
 
 pub struct StringWriter {
-    buf: Vec<u8>
+    buf: Vec<u8>,
 }
 
 impl StringWriter {
@@ -39,10 +59,14 @@ impl StringWriter {
         Self { buf: Vec::new() }
     }
 
-    pub fn with<F, E>(f: F) -> Result<String, E> where F: FnOnce(&mut Self) -> Result<(), E> {
+    pub fn with<F, E>(f: F) -> Result<String, E>
+    where
+        F: FnOnce(&mut Self) -> Result<(), E>,
+    {
         let mut writer = Self::new();
         f(&mut writer)?;
-        Ok(writer.as_str()
+        Ok(writer
+            .as_str()
             .expect("Unable to interpret buffer as utf-8 string")
             .to_string())
     }

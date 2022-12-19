@@ -4,7 +4,7 @@ use crate::ir;
 use crate::optimizer;
 use crate::utils;
 
-use std::fmt::format;
+use std::collections::HashMap;
 use std::io::Write;
 
 #[derive(Clone)]
@@ -59,14 +59,18 @@ struct Slot {
     offset: usize,
 }
 
-struct WorkspaceArtifact {/* information on stack */}
+struct WorkspaceArtifact {
+    stack_size: usize,
+}
 
 struct WorkspaceContext {
     stack: VirtualStack,
 }
 
 struct VirtualStack {
-    top: usize,
+    id: Id,
+    offset: usize,
+    maximum_size: usize,
 }
 
 pub type WriterError = std::io::Error;
@@ -99,7 +103,7 @@ impl<'a> AssemblyGenerator<'a> {
                 self.try_pop(context)?;
                 self.code
                     .push_instruction(agc::Instruction::ADS, Some(dest_slot));
-                context.stack.top -= 1;
+                context.stack.offset -= 1;
 
                 Ok(())
             }
@@ -155,7 +159,7 @@ impl<'a> AssemblyGenerator<'a> {
         procedure: &compiler::ProcedureDefinition,
     ) -> Result<WorkspaceArtifact, GeneratorError> {
         let mut context = WorkspaceContext {
-            stack: VirtualStack::new(),
+            stack: VirtualStack::new(Id::from(id)),
         };
 
         self.code
@@ -179,9 +183,12 @@ impl<'a> AssemblyGenerator<'a> {
         &mut self,
         program: &compiler::ProgramCompilation,
     ) -> Result<(), GeneratorError> {
+        let mut workspace_artifacts: HashMap<ir::Id, WorkspaceArtifact> = HashMap::new();
+
         // Write out the procedure code
         for (id, proc_def) in &program.procedures {
-            self.try_generate_procedure(*id, proc_def)?;
+            let artifact = self.try_generate_procedure(*id, proc_def)?;
+            workspace_artifacts.insert(*id, artifact);
         }
 
         // Write out main
@@ -220,7 +227,7 @@ impl<'a> AssemblyGenerator<'a> {
         // Write the workspace and stack slots out
         self.data.push_comment(String::from("WORKSPACES"));
 
-        for (_, proc) in &program.procedures {
+        for (id, proc) in &program.procedures {
             if !proc.layout.placeholders.is_empty() {
                 self.data.push_break();
                 self.data.push_comment(proc.prototype.signature.clone());
@@ -233,6 +240,20 @@ impl<'a> AssemblyGenerator<'a> {
                         },
                         agc::Instruction::ERASE,
                         placeholder.words - 1
+                    ));
+                }
+            }
+
+            if let Some(artfact) = workspace_artifacts.get(id) {
+                if artfact.stack_size > 0 {
+                    self.data.push_raw(format!(
+                        "{}\t{}\t{}",
+                        Label {
+                            id: Id::from(*id),
+                            kind: LabelType::Stack
+                        },
+                        agc::Instruction::ERASE,
+                        artfact.stack_size - 1
                     ));
                 }
             }
@@ -345,22 +366,31 @@ impl From<Label> for Slot {
 }
 
 impl From<&VirtualStack> for WorkspaceArtifact {
-    fn from(_: &VirtualStack) -> Self {
-        Self {}
+    fn from(vstack: &VirtualStack) -> Self {
+        Self {
+            stack_size: vstack.maximum_size,
+        }
     }
 }
 
 impl VirtualStack {
-    fn new() -> Self {
-        Self { top: 0 }
+    fn new(id: Id) -> Self {
+        Self {
+            id,
+            offset: 0,
+            maximum_size: 0,
+        }
     }
 
     fn push(&mut self) -> Slot {
-        let offset = self.top;
-        self.top += 1;
+        let offset = self.offset;
+        self.offset += 1;
+
+        self.maximum_size = std::cmp::max(self.offset, self.maximum_size);
+
         Slot {
             label: Label {
-                id: Id(0),
+                id: self.id,
                 kind: LabelType::Stack,
             },
             offset,
@@ -368,13 +398,13 @@ impl VirtualStack {
     }
 
     fn pop(&mut self) -> Slot {
-        self.top -= 1;
+        self.offset -= 1;
         Slot {
             label: Label {
-                id: Id(0),
+                id: self.id,
                 kind: LabelType::Stack,
             },
-            offset: self.top,
+            offset: self.offset,
         }
     }
 }

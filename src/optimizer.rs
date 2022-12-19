@@ -1,15 +1,17 @@
-pub trait Instruction: {
+pub trait Instruction {
     fn is_code_instruction(&self) -> bool;
     fn is_redundant(pair: (&Self, &Self)) -> bool;
 }
 
-pub fn optimize<T>(mut instructions: Vec<T>) -> Vec<T> where T: Instruction + Clone {
+pub fn optimize<T>(mut instructions: Vec<T>) -> Vec<T>
+where
+    T: Instruction + Clone,
+{
     let mut optimized_set = Vec::new();
 
     let mut index = 0;
     let mut offset = 1;
     while index + offset < instructions.len() {
-
         // If first isn't a real code instruction, skip it and continue
         let first = &instructions[index];
         if !T::is_code_instruction(first) {
