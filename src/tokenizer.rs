@@ -136,17 +136,12 @@ impl<'a> Iterator for TokenIter<'a> {
                         // Ignore, but move the range ptr forward
                         _ = rest.next();
                     }
-                    'a'..='z' | 'A'..='Z' | '_' | '$' => {
-                        state = TokenizerState::MatchingIdentifier { length: 1 }
-                    }
+                    'a'..='z' | 'A'..='Z' | '_' | '$' => state = TokenizerState::MatchingIdentifier { length: 1 },
                     '0'..='9' => state = TokenizerState::MatchingNumber { length: 1 },
                     '=' => {
                         state = TokenizerState::MatchingPartial {
                             fallback: TokenKind::Assignment,
-                            terminals: &[
-                                ('=', TokenKind::OpEquality),
-                                ('>', TokenKind::ArrowDouble),
-                            ],
+                            terminals: &[('=', TokenKind::OpEquality), ('>', TokenKind::ArrowDouble)],
                         }
                     }
                     '-' => {
@@ -224,10 +219,7 @@ impl<'a> Iterator for TokenIter<'a> {
                 rest: &rest.as_str(),
                 range: &rest.as_str()[0..length],
             })),
-            TokenizerState::MatchingPartial {
-                fallback,
-                terminals,
-            } => {
+            TokenizerState::MatchingPartial { fallback, terminals } => {
                 for (expected_c, kind) in terminals {
                     match iter.peek() {
                         Some(next_c) if next_c == expected_c => {
@@ -287,9 +279,9 @@ impl StringNormalizer {
     pub fn extract_and_unescape(s: &str) -> Result<String, StringNormalizationError> {
         // TODO: Actually implement this
         if s.len() < 2 {
-            Err(StringNormalizationError::UnexpectedStringFormat(
-                String::from("Expected string to be at least two (2) characters long"),
-            ))
+            Err(StringNormalizationError::UnexpectedStringFormat(String::from(
+                "Expected string to be at least two (2) characters long",
+            )))
         } else {
             Ok(s[1..s.len() - 1].to_string())
         }

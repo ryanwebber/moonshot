@@ -76,19 +76,13 @@ impl From<&Operator> for sexpr::Value {
 impl<'a> From<&Expression<'a>> for sexpr::Value {
     fn from(v: &Expression<'a>) -> Self {
         match v {
-            Expression::BinOpExpression { lhs, op, rhs } => sexpr::Value::List(vec![
-                Into::into(&*op),
-                Into::into(&**lhs),
-                Into::into(&**rhs),
-            ]),
-            Expression::NumberLiteralExpression { value } => {
-                sexpr::Value::Number(String::from(*value))
+            Expression::BinOpExpression { lhs, op, rhs } => {
+                sexpr::Value::List(vec![Into::into(&*op), Into::into(&**lhs), Into::into(&**rhs)])
             }
-            Expression::VarAccess { path } => sexpr::Value::List(
-                path.iter()
-                    .map(|p| sexpr::Value::Symbol(String::from(*p)))
-                    .collect(),
-            ),
+            Expression::NumberLiteralExpression { value } => sexpr::Value::Number(String::from(*value)),
+            Expression::VarAccess { path } => {
+                sexpr::Value::List(path.iter().map(|p| sexpr::Value::Symbol(String::from(*p))).collect())
+            }
         }
     }
 }

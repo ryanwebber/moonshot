@@ -86,9 +86,6 @@ impl std::fmt::Display for Value {
 
 impl Value {
     pub fn to_pretty<'a>(&'a self) -> PrettyPrintable<'a> {
-        PrettyPrintable {
-            _indent: 0,
-            node: self,
-        }
+        PrettyPrintable { _indent: 0, node: self }
     }
 }

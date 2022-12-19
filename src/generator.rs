@@ -63,10 +63,6 @@ struct WorkspaceArtifact {
     stack_size: usize,
 }
 
-struct WorkspaceContext {
-    stack: VirtualStack,
-}
-
 struct VirtualStack {
     id: Id,
     offset: usize,
@@ -85,56 +81,46 @@ impl<'a> AssemblyGenerator<'a> {
 
     fn try_push_const_expr(&mut self, expr: &ir::ConstExpr) -> Result<(), GeneratorError> {
         let const_slot: Slot = Label::with(expr.id, LabelType::Const).into();
-        self.code
-            .push_instruction(agc::Instruction::CAF, Some(const_slot));
+        self.code.push_instruction(agc::Instruction::CAF, Some(const_slot));
         Ok(())
     }
 
-    fn try_push(
-        &mut self,
-        rval: &ir::RVal,
-        context: &mut WorkspaceContext,
-    ) -> Result<(), GeneratorError> {
-        let dest_slot = context.stack.push();
+    fn try_push(&mut self, rval: &ir::RVal, stack: &mut VirtualStack) -> Result<(), GeneratorError> {
+        let dest_slot = stack.push();
         match rval {
             ir::RVal::Add(expr) => {
-                self.try_push(&*expr.lhs, context)?;
-                self.try_push(&*expr.rhs, context)?;
-                self.try_pop(context)?;
-                self.code
-                    .push_instruction(agc::Instruction::ADS, Some(dest_slot));
-                context.stack.offset -= 1;
+                self.try_push(&*expr.lhs, stack)?;
+                self.try_push(&*expr.rhs, stack)?;
+                self.try_pop(stack)?;
+                self.code.push_instruction(agc::Instruction::ADS, Some(dest_slot));
+                stack.offset -= 1;
 
                 Ok(())
             }
             ir::RVal::Const(expr) => {
                 self.try_push_const_expr(expr)?;
-                self.code
-                    .push_instruction(agc::Instruction::TS, Some(dest_slot));
+                self.code.push_instruction(agc::Instruction::TS, Some(dest_slot));
                 Ok(())
             }
             ir::RVal::Reg(expr) => {
                 let source_slot = Slot::from(expr.reg);
-                self.code
-                    .push_instruction(agc::Instruction::CAE, Some(source_slot));
-                self.code
-                    .push_instruction(agc::Instruction::TS, Some(dest_slot));
+                self.code.push_instruction(agc::Instruction::CAE, Some(source_slot));
+                self.code.push_instruction(agc::Instruction::TS, Some(dest_slot));
                 Ok(())
             }
         }
     }
 
-    fn try_pop(&mut self, context: &mut WorkspaceContext) -> Result<Slot, GeneratorError> {
-        let slot = context.stack.pop();
-        self.code
-            .push_instruction(agc::Instruction::CAE, Some(slot.clone()));
+    fn try_pop(&mut self, stack: &mut VirtualStack) -> Result<Slot, GeneratorError> {
+        let slot = stack.pop();
+        self.code.push_instruction(agc::Instruction::CAE, Some(slot.clone()));
         Ok(slot)
     }
 
     fn try_generate_instruction(
         &mut self,
         instruction: &ir::Instruction,
-        context: &mut WorkspaceContext,
+        stack: &mut VirtualStack,
     ) -> Result<(), GeneratorError> {
         match instruction {
             ir::Instruction::Set(lhs, rhs) => {
@@ -143,10 +129,9 @@ impl<'a> AssemblyGenerator<'a> {
                 };
 
                 let dest_slot = Slot::from(register);
-                self.try_push(rhs, context)?;
-                self.try_pop(context)?;
-                self.code
-                    .push_instruction(agc::Instruction::TS, Some(dest_slot));
+                self.try_push(rhs, stack)?;
+                self.try_pop(stack)?;
+                self.code.push_instruction(agc::Instruction::TS, Some(dest_slot));
 
                 Ok(())
             }
@@ -158,31 +143,25 @@ impl<'a> AssemblyGenerator<'a> {
         id: ir::Id,
         procedure: &compiler::ProcedureDefinition,
     ) -> Result<WorkspaceArtifact, GeneratorError> {
-        let mut context = WorkspaceContext {
-            stack: VirtualStack::new(Id::from(id)),
-        };
+        let mut stack = VirtualStack::new(Id::from(id));
 
-        self.code
-            .push_comment(format!("{}", procedure.prototype.signature));
+        self.code.push_comment(format!("{}", procedure.prototype.signature));
 
         // Write the function label
         self.code.push_label(Label::with(id, LabelType::Procedure));
 
         // Generate the function body
         for instruction in &procedure.body.instructions {
-            self.try_generate_instruction(instruction, &mut context)?;
+            self.try_generate_instruction(instruction, &mut stack)?;
         }
 
         // Finally, return
         self.code.push_instruction(agc::Instruction::RETURN, None);
 
-        Ok(WorkspaceArtifact::from(&context.stack))
+        Ok(WorkspaceArtifact::from(&stack))
     }
 
-    fn try_generate(
-        &mut self,
-        program: &compiler::ProgramCompilation,
-    ) -> Result<(), GeneratorError> {
+    fn try_generate(&mut self, program: &compiler::ProgramCompilation) -> Result<(), GeneratorError> {
         let mut workspace_artifacts: HashMap<ir::Id, WorkspaceArtifact> = HashMap::new();
 
         // Write out the procedure code
@@ -228,20 +207,19 @@ impl<'a> AssemblyGenerator<'a> {
         self.data.push_comment(String::from("WORKSPACES"));
 
         for (id, proc) in &program.procedures {
+            let workspace_size = proc.layout.placeholders.iter().fold(0, |accum, p| accum + p.words);
             if !proc.layout.placeholders.is_empty() {
                 self.data.push_break();
                 self.data.push_comment(proc.prototype.signature.clone());
-                for placeholder in &proc.layout.placeholders {
-                    self.data.push_raw(format!(
-                        "{}\t{}\t{}",
-                        Label {
-                            id: Id::from(placeholder.id),
-                            kind: LabelType::Workspace
-                        },
-                        agc::Instruction::ERASE,
-                        placeholder.words - 1
-                    ));
-                }
+                self.data.push_raw(format!(
+                    "{}\t{}\t{}",
+                    Label {
+                        id: Id::from(*id),
+                        kind: LabelType::Workspace
+                    },
+                    agc::Instruction::ERASE,
+                    workspace_size - 1
+                ));
             }
 
             if let Some(artfact) = workspace_artifacts.get(id) {
@@ -277,8 +255,7 @@ impl AssemblyWriter {
     }
 
     fn push_instruction(&mut self, instruction: agc::Instruction, operand: Option<Slot>) {
-        self.buf
-            .push(AssemblyEntry::Instruction(instruction, operand));
+        self.buf.push(AssemblyEntry::Instruction(instruction, operand));
     }
 
     fn push_label(&mut self, label: Label) {
@@ -292,17 +269,12 @@ impl AssemblyWriter {
 
 impl Label {
     fn with(id: ir::Id, kind: LabelType) -> Label {
-        Label {
-            id: Id::from(id),
-            kind,
-        }
+        Label { id: Id::from(id), kind }
     }
 }
 
 impl Generator {
-    pub fn try_generate(
-        program: &compiler::ProgramCompilation,
-    ) -> Result<AssemblyPackage, GeneratorError> {
+    pub fn try_generate(program: &compiler::ProgramCompilation) -> Result<AssemblyPackage, GeneratorError> {
         let mut code_writer = AssemblyWriter::new();
         let mut data_writer = AssemblyWriter::new();
         let mut generator = AssemblyGenerator::new(&mut code_writer, &mut data_writer);
@@ -429,10 +401,7 @@ impl optimizer::Instruction for AssemblyEntry {
 }
 
 impl AssemblyPackage {
-    fn flush_labels(
-        f: &mut utils::StringWriter,
-        labels: &mut Vec<Label>,
-    ) -> Result<bool, WriterError> {
+    fn flush_labels(f: &mut utils::StringWriter, labels: &mut Vec<Label>) -> Result<bool, WriterError> {
         if let Some((last, rest)) = labels.split_last() {
             // Labels have to be followed by instructions or weird stuff can happen
             // (segfaults in the yaAGC), so we make use of the '=' pseudo op here
