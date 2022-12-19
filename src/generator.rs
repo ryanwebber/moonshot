@@ -4,13 +4,15 @@ use crate::ir;
 use crate::optimizer;
 use crate::utils;
 
+use std::fmt::format;
 use std::io::Write;
 
+#[derive(Clone)]
 enum AssemblyEntry {
     Comment(String),
     Instruction(agc::Instruction, Option<Slot>),
     Label(Label),
-    Raw(Vec<String>),
+    Raw(String),
 }
 
 struct AssemblyGenerator<'a> {
@@ -184,15 +186,13 @@ impl<'a> AssemblyGenerator<'a> {
 
         // Write out main
         self.code.push_break();
-        self.code.push_columns(vec![
-            String::from("MAIN"),
-            String::from("="),
+        self.code.push_raw(format!(
+            "MAIN\t\t=\t{}",
             Label {
                 id: Id::from(program.main_proc),
                 kind: LabelType::Procedure,
             }
-            .to_string(),
-        ]);
+        ));
 
         self.code.push_break();
 
@@ -207,32 +207,33 @@ impl<'a> AssemblyGenerator<'a> {
                     exponent,
                     precision: ir::Precision::Single,
                 } => {
-                    self.code.push_columns(vec![
-                        Label::with(*id, LabelType::Const).to_string(),
-                        String::from("DEC"),
-                        format!("{}.0 E{}", base, exponent),
-                    ]);
+                    self.code.push_raw(format!(
+                        "{}\tDEC\t{}.0 E{}",
+                        Label::with(*id, LabelType::Const),
+                        base,
+                        exponent
+                    ));
                 }
             }
         }
 
         // Write the workspace and stack slots out
         self.data.push_comment(String::from("WORKSPACES"));
-        self.data.push_break();
 
         for (_, proc) in &program.procedures {
             if !proc.layout.placeholders.is_empty() {
+                self.data.push_break();
                 self.data.push_comment(proc.prototype.signature.clone());
                 for placeholder in &proc.layout.placeholders {
-                    self.data.push_columns(vec![
+                    self.data.push_raw(format!(
+                        "{}\t{}\t{}",
                         Label {
                             id: Id::from(placeholder.id),
-                            kind: LabelType::Workspace,
-                        }
-                        .to_string(),
-                        agc::Instruction::ERASE.to_string(),
-                        format!("{}", placeholder.words - 1),
-                    ]);
+                            kind: LabelType::Workspace
+                        },
+                        agc::Instruction::ERASE,
+                        placeholder.words - 1
+                    ));
                 }
             }
         }
@@ -247,15 +248,11 @@ impl AssemblyWriter {
     }
 
     fn push_break(&mut self) {
-        self.buf.push(AssemblyEntry::Raw(Vec::new()));
+        self.buf.push(AssemblyEntry::Raw(String::from("")));
     }
 
     fn push_comment(&mut self, comment: String) {
         self.buf.push(AssemblyEntry::Comment(comment));
-    }
-
-    fn push_columns(&mut self, columns: Vec<String>) {
-        self.buf.push(AssemblyEntry::Raw(columns));
     }
 
     fn push_instruction(&mut self, instruction: agc::Instruction, operand: Option<Slot>) {
@@ -265,6 +262,10 @@ impl AssemblyWriter {
 
     fn push_label(&mut self, label: Label) {
         self.buf.push(AssemblyEntry::Label(label));
+    }
+
+    fn push_raw(&mut self, s: String) {
+        self.buf.push(AssemblyEntry::Raw(s));
     }
 }
 
@@ -389,8 +390,8 @@ impl optimizer::Instruction for AssemblyEntry {
     fn is_redundant(pair: (&Self, &Self)) -> bool {
         match pair {
             (
-                AssemblyEntry::Instruction(agc::Instruction::TS, store_slot),
-                AssemblyEntry::Instruction(agc::Instruction::CAE, load_slot),
+                AssemblyEntry::Instruction(agc::Instruction::TS, Some(store_slot)),
+                AssemblyEntry::Instruction(agc::Instruction::CAE, Some(load_slot)),
             ) => store_slot == load_slot, // <SLOT> := A followed by A := <SLOT>
             _ => false,
         }
@@ -447,38 +448,8 @@ impl AssemblyPackage {
                     AssemblyEntry::Label(label) => {
                         buffered_labels.push(*label);
                     }
-                    AssemblyEntry::Raw(columns) => {
-                        let tabs = if let Some(label) = columns.first() {
-                            write!(f, "{}", label)?;
-                            if label.len() < 8 {
-                                2
-                            } else {
-                                1
-                            }
-                        } else {
-                            2
-                        };
-
-                        if let Some(instruction) = columns.get(1) {
-                            for _ in 0..tabs {
-                                write!(f, "\t")?;
-                            }
-
-                            write!(f, "{}", instruction)?;
-                        }
-
-                        if columns.len() > 2 {
-                            write!(f, "\t")?;
-                            for (i, operand) in columns.iter().skip(2).enumerate() {
-                                if i > 0 {
-                                    write!(f, " ")?;
-                                }
-
-                                write!(f, "{}", operand)?;
-                            }
-                        }
-
-                        write!(f, "\n")?;
+                    AssemblyEntry::Raw(s) => {
+                        write!(f, "{}\n", s)?;
                     }
                 }
             }
