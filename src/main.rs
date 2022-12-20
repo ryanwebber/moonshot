@@ -69,8 +69,7 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
             .modules
             .iter()
             .map(|module| {
-                compiler::Compiler::check_and_build_header(module, &mut ids)
-                    .map(|header| compiler::Compiler::check_and_compile(module, header))?
+                compiler::Compiler::check_and_build_header(module, &mut ids).map(|header| compiler::Compiler::check_and_compile(module, header))?
             })
             .collect();
 
@@ -79,12 +78,18 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
 
     let program = compiler::Compiler::package_modules(modules)?;
 
+    println!("#");
+    println!("# PROCEDURE LIST");
+    println!("#");
+
+    println!("");
+
     for (id, procdef) in &program.procedures {
-        println!("[{}] {} {{", id, procdef.prototype.signature);
+        println!("# [{}] {} {{", id, procdef.prototype.signature);
         for instruction in &procdef.body.instructions {
-            println!("\t{}", sexpr::Value::from(instruction));
+            println!("# \t{}", sexpr::Value::from(instruction));
         }
-        println!("}}\n");
+        println!("# }}\n");
     }
 
     let contents = {
