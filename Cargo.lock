@@ -9,7 +9,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adab1eaa3408fb7f0c777a73e7465fd5656136fc93b670eb6df3c88c2c1344e3"
 
 [[package]]
-name = "playfield"
+name = "moonshot"
 version = "0.1.0"
 dependencies = [
  "indoc",

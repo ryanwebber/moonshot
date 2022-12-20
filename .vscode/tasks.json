@@ -1,22 +1,21 @@
 {
-	"version": "2.0.0",
-	"tasks": [
-		{
-			"type": "cargo",
-			"command": "run",
-			"args": [
-				"--package",
-				"playfield",
-				"--bin",
-				"playfield"
-			],
-			"env": {
-			},
-			"problemMatcher": [
-				"$rustc"
-			],
-			"group": "build",
-			"label": "rust: run playfield"
-		}
-	]
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "cargo",
+            "command": "run",
+            "args": [
+                "--package",
+                "moonshot",
+                "--bin",
+                "moonshot"
+            ],
+            "env": {},
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": "build",
+            "label": "rust: run moonshot"
+        }
+    ]
 }

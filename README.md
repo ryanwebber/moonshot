@@ -1,3 +1,3 @@
-# Playfield Language + Toolchain
+# Moonshot Language + Toolchain
 
 A compiler toolchain targeting the Apollo Guidance Computer.

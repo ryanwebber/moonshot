@@ -10,7 +10,7 @@ use std::io::Write;
 #[derive(Clone)]
 enum AssemblyEntry {
     Comment(String),
-    Instruction(agc::Instruction, Option<Slot>),
+    Instruction(agc::Instruction, Option<Operand>),
     Label(Label),
     Raw(String),
 }
@@ -53,6 +53,11 @@ enum LabelType {
     Workspace,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Operand {
+    Slot(Slot),
+}
+
 #[derive(PartialEq, Eq, Hash, Debug, Clone)]
 struct Slot {
     label: Label,
@@ -81,7 +86,7 @@ impl<'a> AssemblyGenerator<'a> {
 
     fn try_push_const_expr(&mut self, expr: &ir::ConstExpr) -> Result<(), GeneratorError> {
         let const_slot: Slot = Label::with(expr.id, LabelType::Const).into();
-        self.code.push_instruction(agc::Instruction::CAF, Some(const_slot));
+        self.code.push_instruction(agc::Instruction::CAF, Some(Operand::Slot(const_slot)));
         Ok(())
     }
 
@@ -92,20 +97,20 @@ impl<'a> AssemblyGenerator<'a> {
                 self.try_push(&*expr.lhs, stack)?;
                 self.try_push(&*expr.rhs, stack)?;
                 self.try_pop(stack)?;
-                self.code.push_instruction(agc::Instruction::ADS, Some(dest_slot));
+                self.code.push_instruction(agc::Instruction::ADS, Some(Operand::Slot(dest_slot)));
                 stack.offset -= 1;
 
                 Ok(())
             }
             ir::RVal::Const(expr) => {
                 self.try_push_const_expr(expr)?;
-                self.code.push_instruction(agc::Instruction::TS, Some(dest_slot));
+                self.code.push_instruction(agc::Instruction::TS, Some(Operand::Slot(dest_slot)));
                 Ok(())
             }
             ir::RVal::Reg(expr) => {
                 let source_slot = Slot::from(expr.reg);
-                self.code.push_instruction(agc::Instruction::CAE, Some(source_slot));
-                self.code.push_instruction(agc::Instruction::TS, Some(dest_slot));
+                self.code.push_instruction(agc::Instruction::CAE, Some(Operand::Slot(source_slot)));
+                self.code.push_instruction(agc::Instruction::TS, Some(Operand::Slot(dest_slot)));
                 Ok(())
             }
         }
@@ -113,15 +118,11 @@ impl<'a> AssemblyGenerator<'a> {
 
     fn try_pop(&mut self, stack: &mut VirtualStack) -> Result<Slot, GeneratorError> {
         let slot = stack.pop();
-        self.code.push_instruction(agc::Instruction::CAE, Some(slot.clone()));
+        self.code.push_instruction(agc::Instruction::CAE, Some(Operand::Slot(slot.clone())));
         Ok(slot)
     }
 
-    fn try_generate_instruction(
-        &mut self,
-        instruction: &ir::Instruction,
-        stack: &mut VirtualStack,
-    ) -> Result<(), GeneratorError> {
+    fn try_generate_instruction(&mut self, instruction: &ir::Instruction, stack: &mut VirtualStack) -> Result<(), GeneratorError> {
         match instruction {
             ir::Instruction::Set(lhs, rhs) => {
                 let register = match lhs {
@@ -131,18 +132,14 @@ impl<'a> AssemblyGenerator<'a> {
                 let dest_slot = Slot::from(register);
                 self.try_push(rhs, stack)?;
                 self.try_pop(stack)?;
-                self.code.push_instruction(agc::Instruction::TS, Some(dest_slot));
+                self.code.push_instruction(agc::Instruction::TS, Some(Operand::Slot(dest_slot)));
 
                 Ok(())
             }
         }
     }
 
-    fn try_generate_procedure(
-        &mut self,
-        id: ir::Id,
-        procedure: &compiler::ProcedureDefinition,
-    ) -> Result<WorkspaceArtifact, GeneratorError> {
+    fn try_generate_procedure(&mut self, id: ir::Id, procedure: &compiler::ProcedureDefinition) -> Result<WorkspaceArtifact, GeneratorError> {
         let mut stack = VirtualStack::new(Id::from(id));
 
         self.code.push_comment(format!("{}", procedure.prototype.signature));
@@ -193,12 +190,8 @@ impl<'a> AssemblyGenerator<'a> {
                     exponent,
                     precision: ir::Precision::Single,
                 } => {
-                    self.code.push_raw(format!(
-                        "{}\tDEC\t{}.0 E{}",
-                        Label::with(*id, LabelType::Const),
-                        base,
-                        exponent
-                    ));
+                    self.code
+                        .push_raw(format!("{}\tDEC\t{}.0 E{}", Label::with(*id, LabelType::Const), base, exponent));
                 }
             }
         }
@@ -254,7 +247,7 @@ impl AssemblyWriter {
         self.buf.push(AssemblyEntry::Comment(comment));
     }
 
-    fn push_instruction(&mut self, instruction: agc::Instruction, operand: Option<Slot>) {
+    fn push_instruction(&mut self, instruction: agc::Instruction, operand: Option<Operand>) {
         self.buf.push(AssemblyEntry::Instruction(instruction, operand));
     }
 
@@ -426,7 +419,7 @@ impl AssemblyPackage {
                     AssemblyEntry::Comment(comment) => {
                         write!(f, "# {}\n", comment)?;
                     }
-                    AssemblyEntry::Instruction(instr, Some(slot)) => {
+                    AssemblyEntry::Instruction(instr, Some(Operand::Slot(slot))) => {
                         if Self::flush_labels(f, &mut buffered_labels)? {
                             write!(f, "\t")?;
                         } else {
@@ -435,7 +428,7 @@ impl AssemblyPackage {
 
                         write!(f, "{}\t{}\n", instr, slot)?;
                     }
-                    AssemblyEntry::Instruction(instr, ..) => {
+                    AssemblyEntry::Instruction(instr, None) => {
                         if Self::flush_labels(f, &mut buffered_labels)? {
                             write!(f, "\t")?;
                         } else {
