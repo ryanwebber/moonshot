@@ -21,7 +21,6 @@ COPY --from=toolchain /tmp/virtualagc-20221005/yaYUL/yaYUL /usr/local/bin
 WORKDIR /tmp
 
 COPY Cargo.toml Cargo.lock moonshot/
-COPY .cargo moonshot/.cargo/
 COPY src moonshot/src/
 
 RUN cd moonshot && cargo install --path .
