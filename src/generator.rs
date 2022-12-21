@@ -101,11 +101,10 @@ impl<'a> AssemblyGenerator<'a> {
     fn generate_instruction(&mut self, instruction: &ir::Instruction, stack: &mut VirtualStack) {
         match instruction {
             ir::Instruction::Set(lhs, rhs) => {
-                let register = match lhs {
-                    ir::LVal::Reg(expr) => expr.reg,
+                let dest_slot: Slot = match lhs {
+                    ir::LVal::Reg(expr) => expr.reg.into(),
                 };
 
-                let dest_slot = Slot::from(register);
                 self.generate_expression(rhs, stack);
                 self.code.push_instruction(agc::Instruction::CAE, Some(stack.pop().into()));
                 self.code.push_instruction(agc::Instruction::TS, Some(dest_slot.into()));
@@ -372,10 +371,14 @@ impl optimizer::Instruction for AssemblyEntry {
 
     fn is_redundant_pair(pair: (&Self, &Self)) -> bool {
         match pair {
+            /*
+            <SLOT> := A followed by A := <SLOT>
+            This only works if <SLOT> is not a workspace slot that we expect to read from again
+            */
             (
-                AssemblyEntry::Instruction(agc::Instruction::TS, Some(store_slot)),
-                AssemblyEntry::Instruction(agc::Instruction::CAE, Some(load_slot)),
-            ) => store_slot == load_slot, // <SLOT> := A followed by A := <SLOT>
+                AssemblyEntry::Instruction(agc::Instruction::TS, Some(Operand::Slot(store_slot))),
+                AssemblyEntry::Instruction(agc::Instruction::CAE, Some(Operand::Slot(load_slot))),
+            ) => store_slot == load_slot,
             _ => false,
         }
     }

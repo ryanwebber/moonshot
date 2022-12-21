@@ -102,7 +102,9 @@ fn try_compile_expr(
         }
         ast::Expression::VarAccess { path } => {
             // TODO: support proper variable lookups
-            let path_component = path.first().expect("var access should have been parsed with at least one path component");
+            let path_component = path
+                .first()
+                .expect("var access should have been parsed with at least one path component");
 
             let reg = register_allocator.lookup(path_component).ok_or(CompilerError {
                 msg: format!("Use of undeclared variable '{}'", path_component),
@@ -151,8 +153,13 @@ pub fn check_and_resolve_imports<'a>(_module: &ast::Module<'a>) {
     todo!()
 }
 
-pub fn check_and_build_header<'a>(module: &ast::Module<'a>, ids: &mut dyn utils::IdentifierAllocator<ir::Id>) -> Result<ModuleHeader, CompilerError> {
-    let mut header = ModuleHeader { procedures: HashMap::new() };
+pub fn check_and_build_header<'a>(
+    module: &ast::Module<'a>,
+    ids: &mut dyn utils::IdentifierAllocator<ir::Id>,
+) -> Result<ModuleHeader, CompilerError> {
+    let mut header = ModuleHeader {
+        procedures: HashMap::new(),
+    };
 
     for proc in &module.procs {
         let prototype = ProcedurePrototype::from(proc);
@@ -229,7 +236,11 @@ pub fn package_modules(modules: Vec<ModuleCompilation>) -> Result<ProgramCompila
     };
 
     // Copy constants
-    let constants: HashMap<ir::Id, ir::ConstValue> = modules.iter().flat_map(|m| m.constants.iter()).map(|(a, b)| (b.clone(), *a)).collect();
+    let constants: HashMap<ir::Id, ir::ConstValue> = modules
+        .iter()
+        .flat_map(|m| m.constants.iter())
+        .map(|(a, b)| (b.clone(), *a))
+        .collect();
 
     // Copy procedures
     let procedures: Vec<_> = modules
