@@ -5,9 +5,12 @@ FROM alpine:3.17 as toolchain
 RUN apk update
 RUN apk add build-base ncurses-dev musl-dev
 
-ADD blobs/virtualagc-20221005.tar.gz /tmp
+WORKDIR /tmp
 
-RUN cd /tmp/virtualagc-20221005 && make yaAGC yaYUL 2>/dev/null
+RUN wget https://github.com/virtualagc/virtualagc/archive/refs/tags/20221005.tar.gz -O virtualagc.tar.gz
+RUN ls -l /tmp
+RUN tar -xvf virtualagc.tar.gz
+RUN cd virtualagc-20221005 && make yaAGC yaYUL 2>/dev/null
 
 # Application
 
