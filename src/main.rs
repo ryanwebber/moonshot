@@ -26,14 +26,6 @@ impl From<compiler::PackagingError> for ReportableError {
     }
 }
 
-impl From<generator::GeneratorError> for ReportableError {
-    fn from(_e: generator::GeneratorError) -> Self {
-        ReportableError {
-            msg: String::from("Code generation failed"),
-        }
-    }
-}
-
 impl<'a> From<parser::SyntaxError<'a>> for ReportableError {
     fn from(e: parser::SyntaxError<'a>) -> Self {
         ReportableError { msg: e.to_string() }
@@ -61,7 +53,7 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
         tokens?
     };
 
-    let parse = parser::Parser::try_parse_all(&tokens)?;
+    let parse = parser::try_parse_all(&tokens)?;
     let mut ids = utils::Counter(ir::Id(0));
 
     let modules = {
@@ -69,14 +61,14 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
             .modules
             .iter()
             .map(|module| {
-                compiler::Compiler::check_and_build_header(module, &mut ids).map(|header| compiler::Compiler::check_and_compile(module, header))?
+                compiler::check_and_build_header(module, &mut ids).map(|header| compiler::check_and_compile(module, header))?
             })
             .collect();
 
         modules?
     };
 
-    let program = compiler::Compiler::package_modules(modules)?;
+    let program = compiler::package_modules(modules)?;
 
     println!("#");
     println!("# PROCEDURE LIST");
@@ -93,7 +85,7 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
     }
 
     let contents = {
-        generator::Generator::try_generate(&program)?
+        generator::generate(&program)
             .release_to_yul_assembly()
             .expect("Unable to generate assembly source due to internal error")
     };

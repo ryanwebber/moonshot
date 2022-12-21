@@ -1,6 +1,7 @@
 pub trait Instruction {
     fn is_code_instruction(&self) -> bool;
-    fn is_redundant(pair: (&Self, &Self)) -> bool;
+    fn is_redundant(&self) -> bool;
+    fn is_redundant_pair(pair: (&Self, &Self)) -> bool;
 }
 
 pub fn optimize<T>(mut instructions: Vec<T>) -> Vec<T>
@@ -20,6 +21,11 @@ where
             continue;
         }
 
+        if T::is_redundant(first) {
+            index += 1;
+            continue;
+        }
+
         // If second isn't a real code instruction, skip it and continue
         let second = &instructions[index + offset];
         if !T::is_code_instruction(second) {
@@ -27,7 +33,7 @@ where
             continue;
         }
 
-        if T::is_redundant((first, second)) {
+        if T::is_redundant_pair((first, second)) {
             // Actually remove both instructions from the vector, so we don't see them again
             instructions.remove(index + offset);
             instructions.remove(index);

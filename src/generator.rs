@@ -29,13 +29,6 @@ struct AssemblyWriter {
     buf: Vec<AssemblyEntry>,
 }
 
-pub struct Generator;
-
-pub enum GeneratorError {
-    IoError(std::io::Error),
-    LabelOverflow,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Id(usize);
 
@@ -70,7 +63,7 @@ struct WorkspaceArtifact {
 
 struct VirtualStack {
     id: Id,
-    offset: usize,
+    next_offset: usize,
     maximum_size: usize,
 }
 
@@ -84,45 +77,28 @@ impl<'a> AssemblyGenerator<'a> {
         }
     }
 
-    fn try_push_const_expr(&mut self, expr: &ir::ConstExpr) -> Result<(), GeneratorError> {
-        let const_slot: Slot = Label::with(expr.id, LabelType::Const).into();
-        self.code.push_instruction(agc::Instruction::CAF, Some(Operand::Slot(const_slot)));
-        Ok(())
-    }
-
-    fn try_push(&mut self, rval: &ir::RVal, stack: &mut VirtualStack) -> Result<(), GeneratorError> {
-        let dest_slot = stack.push();
+    fn generate_expression(&mut self, rval: &ir::RVal, stack: &mut VirtualStack) {
         match rval {
             ir::RVal::Add(expr) => {
-                self.try_push(&*expr.lhs, stack)?;
-                self.try_push(&*expr.rhs, stack)?;
-                self.try_pop(stack)?;
-                self.code.push_instruction(agc::Instruction::ADS, Some(Operand::Slot(dest_slot)));
-                stack.offset -= 1;
-
-                Ok(())
+                self.generate_expression(&expr.rhs, stack);
+                self.generate_expression(&expr.lhs, stack);
+                self.code.push_instruction(agc::Instruction::CAE, Some(stack.pop().into()));
+                self.code.push_instruction(agc::Instruction::ADS, Some(stack.top().into()));
             }
             ir::RVal::Const(expr) => {
-                self.try_push_const_expr(expr)?;
-                self.code.push_instruction(agc::Instruction::TS, Some(Operand::Slot(dest_slot)));
-                Ok(())
+                let const_slot: Slot = Label::with(expr.id, LabelType::Const).into();
+                self.code.push_instruction(agc::Instruction::CAF, Some(const_slot.into()));
+                self.code.push_instruction(agc::Instruction::TS, Some(stack.push().into()));
             }
             ir::RVal::Reg(expr) => {
                 let source_slot = Slot::from(expr.reg);
-                self.code.push_instruction(agc::Instruction::CAE, Some(Operand::Slot(source_slot)));
-                self.code.push_instruction(agc::Instruction::TS, Some(Operand::Slot(dest_slot)));
-                Ok(())
+                self.code.push_instruction(agc::Instruction::CAE, Some(source_slot.into()));
+                self.code.push_instruction(agc::Instruction::TS, Some(stack.push().into()));
             }
         }
     }
 
-    fn try_pop(&mut self, stack: &mut VirtualStack) -> Result<Slot, GeneratorError> {
-        let slot = stack.pop();
-        self.code.push_instruction(agc::Instruction::CAE, Some(Operand::Slot(slot.clone())));
-        Ok(slot)
-    }
-
-    fn try_generate_instruction(&mut self, instruction: &ir::Instruction, stack: &mut VirtualStack) -> Result<(), GeneratorError> {
+    fn generate_instruction(&mut self, instruction: &ir::Instruction, stack: &mut VirtualStack) {
         match instruction {
             ir::Instruction::Set(lhs, rhs) => {
                 let register = match lhs {
@@ -130,16 +106,14 @@ impl<'a> AssemblyGenerator<'a> {
                 };
 
                 let dest_slot = Slot::from(register);
-                self.try_push(rhs, stack)?;
-                self.try_pop(stack)?;
-                self.code.push_instruction(agc::Instruction::TS, Some(Operand::Slot(dest_slot)));
-
-                Ok(())
+                self.generate_expression(rhs, stack);
+                self.code.push_instruction(agc::Instruction::CAE, Some(stack.pop().into()));
+                self.code.push_instruction(agc::Instruction::TS, Some(dest_slot.into()));
             }
         }
     }
 
-    fn try_generate_procedure(&mut self, id: ir::Id, procedure: &compiler::ProcedureDefinition) -> Result<WorkspaceArtifact, GeneratorError> {
+    fn generate_procedure(&mut self, id: ir::Id, procedure: &compiler::ProcedureDefinition) -> WorkspaceArtifact {
         let mut stack = VirtualStack::new(Id::from(id));
 
         self.code.push_comment(format!("{}", procedure.prototype.signature));
@@ -149,21 +123,21 @@ impl<'a> AssemblyGenerator<'a> {
 
         // Generate the function body
         for instruction in &procedure.body.instructions {
-            self.try_generate_instruction(instruction, &mut stack)?;
+            self.generate_instruction(instruction, &mut stack);
         }
 
-        // Finally, return
+        // Finally, the return instruction
         self.code.push_instruction(agc::Instruction::RETURN, None);
 
-        Ok(WorkspaceArtifact::from(&stack))
+        WorkspaceArtifact::from(&stack)
     }
 
-    fn try_generate(&mut self, program: &compiler::ProgramCompilation) -> Result<(), GeneratorError> {
+    fn generate(&mut self, program: &compiler::ProgramCompilation) {
         let mut workspace_artifacts: HashMap<ir::Id, WorkspaceArtifact> = HashMap::new();
 
         // Write out the procedure code
         for (id, proc_def) in &program.procedures {
-            let artifact = self.try_generate_procedure(*id, proc_def)?;
+            let artifact = self.generate_procedure(*id, proc_def);
             workspace_artifacts.insert(*id, artifact);
         }
 
@@ -190,8 +164,12 @@ impl<'a> AssemblyGenerator<'a> {
                     exponent,
                     precision: ir::Precision::Single,
                 } => {
-                    self.code
-                        .push_raw(format!("{}\tDEC\t{}.0 E{}", Label::with(*id, LabelType::Const), base, exponent));
+                    self.code.push_raw(format!(
+                        "{}\tDEC\t{}.0 E{}",
+                        Label::with(*id, LabelType::Const),
+                        base,
+                        exponent
+                    ));
                 }
             }
         }
@@ -229,8 +207,6 @@ impl<'a> AssemblyGenerator<'a> {
                 }
             }
         }
-
-        Ok(())
     }
 }
 
@@ -266,18 +242,16 @@ impl Label {
     }
 }
 
-impl Generator {
-    pub fn try_generate(program: &compiler::ProgramCompilation) -> Result<AssemblyPackage, GeneratorError> {
-        let mut code_writer = AssemblyWriter::new();
-        let mut data_writer = AssemblyWriter::new();
-        let mut generator = AssemblyGenerator::new(&mut code_writer, &mut data_writer);
+pub fn generate(program: &compiler::ProgramCompilation) -> AssemblyPackage {
+    let mut code_writer = AssemblyWriter::new();
+    let mut data_writer = AssemblyWriter::new();
+    let mut generator = AssemblyGenerator::new(&mut code_writer, &mut data_writer);
 
-        generator.try_generate(program)?;
+    generator.generate(program);
 
-        Ok(AssemblyPackage {
-            erasable_source: data_writer.buf,
-            fixed_source: code_writer.buf,
-        })
+    AssemblyPackage {
+        erasable_source: data_writer.buf,
+        fixed_source: code_writer.buf,
     }
 }
 
@@ -299,12 +273,6 @@ impl From<ir::Register> for Slot {
     }
 }
 
-impl From<std::io::Error> for GeneratorError {
-    fn from(e: std::io::Error) -> Self {
-        GeneratorError::IoError(e)
-    }
-}
-
 impl std::fmt::Display for Label {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let prefix: char = match self.kind {
@@ -315,6 +283,12 @@ impl std::fmt::Display for Label {
         };
 
         write!(f, "{}{:0>7}", prefix, self.id.0)
+    }
+}
+
+impl From<Slot> for Operand {
+    fn from(slot: Slot) -> Self {
+        Self::Slot(slot)
     }
 }
 
@@ -342,16 +316,16 @@ impl VirtualStack {
     fn new(id: Id) -> Self {
         Self {
             id,
-            offset: 0,
+            next_offset: 0,
             maximum_size: 0,
         }
     }
 
     fn push(&mut self) -> Slot {
-        let offset = self.offset;
-        self.offset += 1;
+        let offset = self.next_offset;
+        self.next_offset += 1;
 
-        self.maximum_size = std::cmp::max(self.offset, self.maximum_size);
+        self.maximum_size = std::cmp::max(offset, self.maximum_size);
 
         Slot {
             label: Label {
@@ -363,13 +337,23 @@ impl VirtualStack {
     }
 
     fn pop(&mut self) -> Slot {
-        self.offset -= 1;
+        self.next_offset -= 1;
         Slot {
             label: Label {
                 id: self.id,
                 kind: LabelType::Stack,
             },
-            offset: self.offset,
+            offset: self.next_offset,
+        }
+    }
+
+    fn top(&mut self) -> Slot {
+        Slot {
+            label: Label {
+                id: self.id,
+                kind: LabelType::Stack,
+            },
+            offset: self.next_offset - 1,
         }
     }
 }
@@ -382,7 +366,11 @@ impl optimizer::Instruction for AssemblyEntry {
         }
     }
 
-    fn is_redundant(pair: (&Self, &Self)) -> bool {
+    fn is_redundant(&self) -> bool {
+        false
+    }
+
+    fn is_redundant_pair(pair: (&Self, &Self)) -> bool {
         match pair {
             (
                 AssemblyEntry::Instruction(agc::Instruction::TS, Some(store_slot)),

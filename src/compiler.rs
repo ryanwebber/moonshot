@@ -5,8 +5,6 @@ use crate::ast;
 use crate::ir;
 use crate::utils;
 
-pub struct Compiler {}
-
 pub struct PackagingError {
     pub msg: String,
 }
@@ -104,9 +102,7 @@ fn try_compile_expr(
         }
         ast::Expression::VarAccess { path } => {
             // TODO: support proper variable lookups
-            let path_component = path
-                .first()
-                .expect("var access should have been parsed with at least one path component");
+            let path_component = path.first().expect("var access should have been parsed with at least one path component");
 
             let reg = register_allocator.lookup(path_component).ok_or(CompilerError {
                 msg: format!("Use of undeclared variable '{}'", path_component),
@@ -130,11 +126,9 @@ fn try_compile_proc<'a>(
     for statement in &proc.block.statements {
         match statement {
             ast::Statement::Definition { expression, name, .. } => {
-                let reg = register_allocator
-                    .try_allocate_unused(name)
-                    .map_err(|_| CompilerError {
-                        msg: format!("Variable '{}' already defined", name),
-                    })?;
+                let reg = register_allocator.try_allocate_unused(name).map_err(|_| CompilerError {
+                    msg: format!("Variable '{}' already defined", name),
+                })?;
 
                 let dest_reg_expr = ir::RegExpr {
                     reg,
@@ -153,136 +147,118 @@ fn try_compile_proc<'a>(
     Ok(body)
 }
 
-impl Compiler {
-    pub fn check_and_resolve_imports<'a>(_module: &ast::Module<'a>) {
-        todo!()
+pub fn check_and_resolve_imports<'a>(_module: &ast::Module<'a>) {
+    todo!()
+}
+
+pub fn check_and_build_header<'a>(module: &ast::Module<'a>, ids: &mut dyn utils::IdentifierAllocator<ir::Id>) -> Result<ModuleHeader, CompilerError> {
+    let mut header = ModuleHeader { procedures: HashMap::new() };
+
+    for proc in &module.procs {
+        let prototype = ProcedurePrototype::from(proc);
+        let id = ids.generate_id();
+        header.procedures.insert(prototype.signature.clone(), (id, prototype));
     }
 
-    pub fn check_and_build_header<'a>(
-        module: &ast::Module<'a>,
-        ids: &mut dyn utils::IdentifierAllocator<ir::Id>,
-    ) -> Result<ModuleHeader, CompilerError> {
-        let mut header = ModuleHeader {
-            procedures: HashMap::new(),
-        };
+    Ok(header)
+}
 
-        for proc in &module.procs {
+pub fn check_and_compile<'a>(module: &ast::Module<'a>, header: ModuleHeader) -> Result<ModuleCompilation, CompilerError> {
+    let mut constant_pool = ConstantPool::new();
+    let procedures: Result<Vec<_>, CompilerError> = module
+        .procs
+        .iter()
+        .map(|proc| {
             let prototype = ProcedurePrototype::from(proc);
-            let id = ids.generate_id();
-            header.procedures.insert(prototype.signature.clone(), (id, prototype));
-        }
 
-        Ok(header)
-    }
+            let id = header
+                .procedures
+                .get(&prototype.signature)
+                .expect("Unable to find id for procedure in the containing module header")
+                .0;
 
-    pub fn check_and_compile<'a>(
-        module: &ast::Module<'a>,
-        header: ModuleHeader,
-    ) -> Result<ModuleCompilation, CompilerError> {
-        let mut constant_pool = ConstantPool::new();
-        let procedures: Result<Vec<_>, CompilerError> = module
-            .procs
+            let mut register_allocator = RegistorAllocator::new(id);
+
+            let body = try_compile_proc(proc, &mut register_allocator, &mut constant_pool)?;
+            let layout = ProcedureLayout {
+                placeholders: register_allocator.placeholders,
+            };
+
+            Ok(ProcedureDefinition { body, layout, prototype })
+        })
+        .collect();
+
+    Ok(ModuleCompilation {
+        constants: constant_pool.mapping,
+        header,
+        module_name: String::from(module.name),
+        procedures: procedures?,
+    })
+}
+
+pub fn package_modules(modules: Vec<ModuleCompilation>) -> Result<ProgramCompilation, PackagingError> {
+    // Find the main proc
+    let main_proc = {
+        let candidates: Vec<_> = modules
             .iter()
-            .map(|proc| {
-                let prototype = ProcedurePrototype::from(proc);
+            .filter(|m| m.module_name == "_")
+            .flat_map(|m| {
+                m.procedures.iter().filter_map(|p| {
+                    if p.prototype.name == "main" {
+                        m.header.procedures.get(&p.prototype.signature).map(|x| x.0)
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
 
-                let id = header
+        match candidates[..] {
+            [main] => main,
+            [] => {
+                return Err(PackagingError {
+                    msg: format!("A procedure named 'main' must be specified in an anonymous module."),
+                })
+            }
+            [..] => {
+                return Err(PackagingError {
+                    msg: format!("Multiple 'main' procedure candidates found."),
+                })
+            }
+        }
+    };
+
+    // Copy constants
+    let constants: HashMap<ir::Id, ir::ConstValue> = modules.iter().flat_map(|m| m.constants.iter()).map(|(a, b)| (b.clone(), *a)).collect();
+
+    // Copy procedures
+    let procedures: Vec<_> = modules
+        .into_iter()
+        .flat_map(|module| {
+            let mut procs: Vec<(ir::Id, ProcedureDefinition)> = Vec::with_capacity(module.procedures.len());
+
+            for proc in module.procedures {
+                let id = module
+                    .header
                     .procedures
-                    .get(&prototype.signature)
+                    .get(&proc.prototype.signature)
                     .expect("Unable to find id for procedure in the containing module header")
                     .0;
 
-                let mut register_allocator = RegistorAllocator::new(id);
-
-                let body = try_compile_proc(proc, &mut register_allocator, &mut constant_pool)?;
-                let layout = ProcedureLayout {
-                    placeholders: register_allocator.placeholders,
-                };
-
-                Ok(ProcedureDefinition {
-                    body,
-                    layout,
-                    prototype,
-                })
-            })
-            .collect();
-
-        Ok(ModuleCompilation {
-            constants: constant_pool.mapping,
-            header,
-            module_name: String::from(module.name),
-            procedures: procedures?,
-        })
-    }
-
-    pub fn package_modules(modules: Vec<ModuleCompilation>) -> Result<ProgramCompilation, PackagingError> {
-        // Find the main proc
-        let main_proc = {
-            let candidates: Vec<_> = modules
-                .iter()
-                .filter(|m| m.module_name == "_")
-                .flat_map(|m| {
-                    m.procedures.iter().filter_map(|p| {
-                        if p.prototype.name == "main" {
-                            m.header.procedures.get(&p.prototype.signature).map(|x| x.0)
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .collect();
-
-            match candidates[..] {
-                [main] => main,
-                [] => {
-                    return Err(PackagingError {
-                        msg: format!("A procedure named 'main' must be specified in an anonymous module."),
-                    })
-                }
-                [..] => {
-                    return Err(PackagingError {
-                        msg: format!("Multiple 'main' procedure candidates found."),
-                    })
-                }
+                procs.push((id, proc))
             }
-        };
 
-        // Copy constants
-        let constants: HashMap<ir::Id, ir::ConstValue> = modules
-            .iter()
-            .flat_map(|m| m.constants.iter())
-            .map(|(a, b)| (b.clone(), *a))
-            .collect();
+            procs
+        })
+        .collect();
 
-        // Copy procedures
-        let procedures: Vec<_> = modules
-            .into_iter()
-            .flat_map(|module| {
-                let mut procs: Vec<(ir::Id, ProcedureDefinition)> = Vec::with_capacity(module.procedures.len());
+    let compilation = ProgramCompilation {
+        constants,
+        main_proc,
+        procedures,
+    };
 
-                for proc in module.procedures {
-                    let id = module
-                        .header
-                        .procedures
-                        .get(&proc.prototype.signature)
-                        .expect("Unable to find id for procedure in the containing module header")
-                        .0;
-
-                    procs.push((id, proc))
-                }
-
-                procs
-            })
-            .collect();
-
-        let compilation = ProgramCompilation {
-            constants,
-            main_proc,
-            procedures,
-        };
-
-        Ok(compilation)
-    }
+    Ok(compilation)
 }
 
 impl ConstantPool {
