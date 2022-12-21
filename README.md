@@ -33,10 +33,10 @@ module _ {
 
 ## Getting Started
 
-The compiler is writted in rust. Build the `moonshot` compiler by running:
+The compiler is written in rust. Build the `moonshot` compiler by running:
 
 ```bash
-cargo install
+cargo build
 ```
 
 The Moonshot compiler  will compile a program to AGC assembly code. The assembly can be assembled
@@ -64,7 +64,7 @@ yaYUL main.agc
 yaAGC main.agc.bin
 ```
 
-## Useful Links
+## Helpful Links
  * [The Virtual AGC Project](https://www.ibiblio.org/apollo/index.html) homepage
  * [Video log](https://youtu.be/VHDkWppysQI) of the development of another compiler targeting
    the AGC
