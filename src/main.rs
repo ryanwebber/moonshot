@@ -101,15 +101,12 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
 fn main() {
     let rope = indoc::indoc! {r#"
         module _ {
-            proc main () {
+            proc main () -> () {
                 let abc: i15 = 78;
-                let x: i15 = (abc + 2);
-                let y: i15 = (1 + x);
-                let z: i15 = y;
             }
 
-            proc add (a: i15, b: i15) -> i15 {
-                let k: i15 = 0;
+            proc add (a: i15, b: i15) -> (c: i15) {
+                c = (a + b);
             }
         }
     "#};

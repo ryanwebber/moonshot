@@ -17,16 +17,16 @@ pub struct Import<'a> {
 
 pub struct Procedure<'a> {
     pub name: &'a str,
-    pub parameter_list: ParameterList<'a>,
-    pub return_type: DataType<'a>,
+    pub parameter_list: DeclarationList<'a>,
+    pub return_list: DeclarationList<'a>,
     pub block: Block<'a>,
 }
 
-pub struct ParameterList<'a> {
-    pub parameters: Vec<NamedParameter<'a>>,
+pub struct DeclarationList<'a> {
+    pub declarations: Vec<NamedDeclaration<'a>>,
 }
 
-pub struct NamedParameter<'a> {
+pub struct NamedDeclaration<'a> {
     pub name: &'a str,
     pub data_type: DataType<'a>,
 }
@@ -37,8 +37,11 @@ pub struct Block<'a> {
 
 pub enum Statement<'a> {
     Definition {
-        name: &'a str,
-        data_type: DataType<'a>,
+        declaration: NamedDeclaration<'a>,
+        expression: Expression<'a>,
+    },
+    Assignment {
+        var_name: &'a str,
         expression: Expression<'a>,
     },
 }
@@ -90,14 +93,14 @@ impl<'a> From<&Expression<'a>> for sexpr::Value {
 impl<'a> From<&Statement<'a>> for sexpr::Value {
     fn from(v: &Statement<'a>) -> Self {
         match v {
-            Statement::Definition {
-                name,
-                data_type,
-                expression,
-            } => sexpr::Value::List(vec![
+            Statement::Definition { declaration, expression } => sexpr::Value::List(vec![
                 sexpr::Value::Symbol(String::from("defn")),
-                sexpr::Value::Symbol(String::from(*name)),
-                sexpr::Value::from(data_type),
+                sexpr::Value::from(declaration),
+                sexpr::Value::from(expression),
+            ]),
+            Statement::Assignment { var_name, expression } => sexpr::Value::List(vec![
+                sexpr::Value::Symbol(String::from("assign")),
+                sexpr::Value::Symbol(String::from(*var_name)),
                 sexpr::Value::from(expression),
             ]),
         }
@@ -116,8 +119,8 @@ impl<'a> From<&Block<'a>> for sexpr::Value {
     }
 }
 
-impl<'a> From<&NamedParameter<'a>> for sexpr::Value {
-    fn from(v: &NamedParameter<'a>) -> Self {
+impl<'a> From<&NamedDeclaration<'a>> for sexpr::Value {
+    fn from(v: &NamedDeclaration<'a>) -> Self {
         sexpr::Value::List(vec![
             sexpr::Value::Symbol(String::from(v.name)),
             sexpr::Value::from(&v.data_type),
@@ -125,9 +128,9 @@ impl<'a> From<&NamedParameter<'a>> for sexpr::Value {
     }
 }
 
-impl<'a> From<&ParameterList<'a>> for sexpr::Value {
-    fn from(v: &ParameterList<'a>) -> Self {
-        sexpr::Value::List(v.parameters.iter().map(Into::into).collect())
+impl<'a> From<&DeclarationList<'a>> for sexpr::Value {
+    fn from(v: &DeclarationList<'a>) -> Self {
+        sexpr::Value::List(v.declarations.iter().map(Into::into).collect())
     }
 }
 
@@ -152,7 +155,7 @@ impl<'a> From<&Procedure<'a>> for sexpr::Value {
             sexpr::Value::Symbol(String::from("proc")),
             sexpr::Value::Symbol(String::from(v.name)),
             sexpr::Value::from(&v.parameter_list),
-            sexpr::Value::from(&v.return_type),
+            sexpr::Value::from(&v.return_list),
             sexpr::Value::from(&v.block),
         ])
     }

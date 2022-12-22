@@ -29,6 +29,7 @@ pub struct ModuleCompilation {
     pub procedures: Vec<ProcedureDefinition>,
 }
 
+#[derive(Clone, Debug, PartialEq, Hash)]
 pub struct Placeholder {
     pub offset: usize,
     pub words: usize,
@@ -48,10 +49,17 @@ pub struct ProcedureLayout {
     pub placeholders: Vec<Placeholder>,
 }
 
-#[derive(Clone, Debug, PartialEq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ProcedurePrototype {
     pub name: String,
     pub signature: String,
+    pub parameters: Vec<StaticDeclaration>,
+    pub returns: Vec<StaticDeclaration>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct StaticDeclaration {
+    pub placeholder: Placeholder,
 }
 
 struct RegistorAllocator {
@@ -118,7 +126,7 @@ fn try_compile_expr(
     }
 }
 
-fn try_compile_proc<'a>(
+fn try_compile_proc_body<'a>(
     proc: &ast::Procedure<'a>,
     register_allocator: &mut RegistorAllocator,
     constant_pool: &mut ConstantPool,
@@ -127,9 +135,25 @@ fn try_compile_proc<'a>(
 
     for statement in &proc.block.statements {
         match statement {
-            ast::Statement::Definition { expression, name, .. } => {
-                let reg = register_allocator.try_allocate_unused(name).map_err(|_| CompilerError {
-                    msg: format!("Variable '{}' already defined", name),
+            ast::Statement::Definition { declaration, expression } => {
+                let reg = register_allocator
+                    .try_allocate_unused(declaration.name)
+                    .map_err(|_| CompilerError {
+                        msg: format!("Variable '{}' already defined", declaration.name),
+                    })?;
+
+                let dest_reg_expr = ir::RegExpr {
+                    reg,
+                    mode: ir::DataMode::SP1,
+                };
+
+                let expr_ir = try_compile_expr(expression, register_allocator, constant_pool)?;
+                let set_inst = ir::Instruction::Set(ir::LVal::Reg(dest_reg_expr), expr_ir);
+                instructions.push(set_inst);
+            }
+            ast::Statement::Assignment { var_name, expression } => {
+                let reg = register_allocator.lookup(var_name).ok_or(CompilerError {
+                    msg: format!("Use of undeclared variable '{}'", var_name),
                 })?;
 
                 let dest_reg_expr = ir::RegExpr {
@@ -147,6 +171,38 @@ fn try_compile_proc<'a>(
     let body = ProcedureBody { instructions };
 
     Ok(body)
+}
+
+fn try_compile_proc<'a>(
+    proc: &ast::Procedure<'a>,
+    header: &ModuleHeader,
+    constant_pool: &mut ConstantPool,
+) -> Result<ProcedureDefinition, CompilerError> {
+    let prototype = ProcedurePrototype::from(proc);
+    let id = header
+        .procedures
+        .get(&prototype.signature)
+        .expect("Unable to find id for procedure in the containing module header")
+        .0;
+
+    let mut register_allocator = RegistorAllocator::new(id);
+
+    // Pre-allocate parameters at the top of the workspace
+    for p in &proc.parameter_list.declarations {
+        _ = register_allocator.try_allocate_unused(p.name);
+    }
+
+    // Pre-allocate return slots at the top of the workspace
+    for r in &proc.return_list.declarations {
+        _ = register_allocator.try_allocate_unused(r.name);
+    }
+
+    let body = try_compile_proc_body(proc, &mut register_allocator, constant_pool)?;
+    let layout = ProcedureLayout {
+        placeholders: register_allocator.placeholders,
+    };
+
+    Ok(ProcedureDefinition { body, layout, prototype })
 }
 
 pub fn check_and_resolve_imports<'a>(_module: &ast::Module<'a>) {
@@ -175,24 +231,7 @@ pub fn check_and_compile<'a>(module: &ast::Module<'a>, header: ModuleHeader) -> 
     let procedures: Result<Vec<_>, CompilerError> = module
         .procs
         .iter()
-        .map(|proc| {
-            let prototype = ProcedurePrototype::from(proc);
-
-            let id = header
-                .procedures
-                .get(&prototype.signature)
-                .expect("Unable to find id for procedure in the containing module header")
-                .0;
-
-            let mut register_allocator = RegistorAllocator::new(id);
-
-            let body = try_compile_proc(proc, &mut register_allocator, &mut constant_pool)?;
-            let layout = ProcedureLayout {
-                placeholders: register_allocator.placeholders,
-            };
-
-            Ok(ProcedureDefinition { body, layout, prototype })
-        })
+        .map(|proc| try_compile_proc(proc, &header, &mut constant_pool))
         .collect();
 
     Ok(ModuleCompilation {
@@ -291,13 +330,44 @@ impl ProcedurePrototype {
         let signature = {
             let mut s = String::from(proc.name);
             s += " (";
-            for p in &proc.parameter_list.parameters {
+            for p in &proc.parameter_list.declarations {
                 s += &format!("{}:", p.name);
             }
             s + ")"
         };
 
-        ProcedurePrototype { name, signature }
+        let parameters: Vec<_> = proc
+            .parameter_list
+            .declarations
+            .iter()
+            .enumerate()
+            .map(|(offset, _)| StaticDeclaration {
+                placeholder: Placeholder {
+                    offset: offset,
+                    words: 1,
+                },
+            })
+            .collect();
+
+        let returns: Vec<_> = proc
+            .return_list
+            .declarations
+            .iter()
+            .enumerate()
+            .map(|(offset, _)| StaticDeclaration {
+                placeholder: Placeholder {
+                    offset: offset + parameters.len(),
+                    words: 1,
+                },
+            })
+            .collect();
+
+        ProcedurePrototype {
+            name,
+            signature,
+            parameters,
+            returns,
+        }
     }
 }
 

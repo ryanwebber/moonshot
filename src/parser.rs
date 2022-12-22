@@ -1,6 +1,7 @@
 use std::slice::Iter;
 
 use crate::ast::*;
+use crate::tokenizer;
 use crate::tokenizer::*;
 
 macro_rules! r#inline {
@@ -38,6 +39,15 @@ pub type PartialParse<'a, Node> = Result<Node, SyntaxError<'a>>;
 #[derive(Clone)]
 pub struct TokenStream<'a> {
     iter: Iter<'a, Token<'a>>,
+}
+
+impl Required {
+    fn is_yes(&self) -> bool {
+        match self {
+            Self::Yes => true,
+            Self::No => false,
+        }
+    }
 }
 
 impl<'a> SyntaxError<'a> {
@@ -139,14 +149,10 @@ impl<'a> TokenStream<'a> {
     }
 }
 
-fn void_type<'a>() -> DataType<'a> {
-    DataType { name: "void" }
-}
-
 fn try_parse_zero_or_more<'a, T>(
     stream: &mut TokenStream<'a>,
     separator: Option<TokenKind>,
-    f: fn(&mut TokenStream<'a>) -> PartialParse<'a, T>,
+    f: fn(&mut TokenStream<'a>, Required) -> PartialParse<'a, T>,
 ) -> PartialParse<'a, Vec<T>> {
     let mut nodes: Vec<T> = Vec::new();
     loop {
@@ -155,7 +161,7 @@ fn try_parse_zero_or_more<'a, T>(
             return Ok(nodes);
         }
 
-        let node_partial = f(&mut stream_clone);
+        let node_partial = f(&mut stream_clone, Required::No);
         match node_partial {
             Ok(node) => {
                 nodes.push(node);
@@ -185,11 +191,11 @@ fn try_parse_zero_or_more<'a, T>(
     }
 }
 
-fn try_parse_binary_op_expr<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Expression<'a>> {
-    stream.try_consume(TokenKind::ParenOpen, Required::No)?;
-    let lhs = try_parse_expr(stream)?;
+fn try_parse_binary_op_expr<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Expression<'a>> {
+    stream.try_consume(TokenKind::ParenOpen, required)?;
+    let lhs = try_parse_expr(stream, Required::Yes)?;
     stream.try_consume(TokenKind::OpAddition, Required::Yes)?;
-    let rhs = try_parse_expr(stream)?;
+    let rhs = try_parse_expr(stream, Required::Yes)?;
     stream.try_consume(TokenKind::ParenClose, Required::Yes)?;
     Ok(Expression::BinOpExpression {
         lhs: Box::new(lhs),
@@ -198,8 +204,8 @@ fn try_parse_binary_op_expr<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a
     })
 }
 
-fn try_parse_var_access<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Expression<'a>> {
-    let base_identifier = stream.try_consume(TokenKind::Identifier, Required::No)?;
+fn try_parse_var_access<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Expression<'a>> {
+    let base_identifier = stream.try_consume(TokenKind::Identifier, required)?;
     let mut path: Vec<&'a str> = vec![base_identifier.range];
 
     // TODO: This doesn't create a proper AST representation for tuples
@@ -222,19 +228,20 @@ fn try_parse_var_access<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Ex
     Ok(Expression::VarAccess { path })
 }
 
-fn try_parse_numeric_literal_expr<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Expression<'a>> {
-    let num_token = stream.try_consume(TokenKind::Number, Required::No)?;
+fn try_parse_numeric_literal_expr<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Expression<'a>> {
+    let num_token = stream.try_consume(TokenKind::Number, required)?;
     Ok(Expression::NumberLiteralExpression { value: num_token.range })
 }
 
-pub fn try_parse_expr<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Expression<'a>> {
+pub fn try_parse_expr<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Expression<'a>> {
     let initial_stream = stream.clone();
     let parsers = [try_parse_binary_op_expr, try_parse_numeric_literal_expr, try_parse_var_access];
 
     parsers
         .iter()
         .map(|&p| {
-            p(stream).map_err(|op| op.with_context(format!("While parsing expression: {}", initial_stream.sample_source())))
+            p(stream, Required::No)
+                .map_err(|op| op.with_context(format!("While parsing expression: {}", initial_stream.sample_source())))
         })
         .find(|r| match r {
             Err(SyntaxError {
@@ -243,66 +250,116 @@ pub fn try_parse_expr<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Expr
             }) => false,
             _ => true,
         })
-        .unwrap_or(Err(SyntaxError {
-            kind: PartialParseError::Unexpected {
-                description: format!("Unable to parse expression"),
-            },
-            position: stream.peek(),
-            context: vec![],
-        }
-        .with_context(format!("While parsing expression: {}", initial_stream.sample_source()))))
+        .unwrap_or_else(|| {
+            if required.is_yes() {
+                Err(SyntaxError {
+                    kind: PartialParseError::Unexpected {
+                        description: format!("Unable to parse expression"),
+                    },
+                    position: stream.peek(),
+                    context: vec![],
+                })
+            } else {
+                Err(SyntaxError {
+                    kind: PartialParseError::Unmatched {
+                        wanted: String::from("expression"),
+                    },
+                    position: stream.peek(),
+                    context: vec![],
+                })
+            }
+        })
+        .map_err(|e| e.with_context(format!("While parsing expression: {}", initial_stream.sample_source())))
 }
 
-pub fn try_parse_data_type<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, DataType<'a>> {
-    let type_name = stream.try_consume(TokenKind::Identifier, Required::Yes)?;
+pub fn try_parse_data_type<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, DataType<'a>> {
+    let type_name = stream.try_consume(TokenKind::Identifier, required)?;
     return Ok(DataType { name: type_name.range });
 }
 
-pub fn try_parse_statement<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Statement<'a>> {
-    let initial_stream = stream.clone();
-    inline!({
-        stream.try_consume(TokenKind::KwdLet, Required::No)?;
-        let var_name = stream.try_consume(TokenKind::Identifier, Required::Yes)?;
-        stream.try_consume(TokenKind::Colon, Required::Yes)?;
-        let data_type = try_parse_data_type(stream)?;
-        stream.try_consume(TokenKind::Assignment, Required::Yes)?;
-        let expression = try_parse_expr(stream)?;
-        stream.try_consume(TokenKind::SemiColon, Required::Yes)?;
-        Ok(Statement::Definition {
-            name: var_name.range,
-            data_type,
-            expression,
-        })
-    })
-    .map_err(|op: SyntaxError<'a>| op.with_context(format!("While parsing statement: {}", initial_stream.sample_source())))
-}
-
-pub fn try_parse_block<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Block<'a>> {
-    stream.try_consume(TokenKind::BraceOpen, Required::No)?;
-    let statements = try_parse_zero_or_more(stream, None, try_parse_statement)?;
-    stream.try_consume(TokenKind::BraceClose, Required::Yes)?;
-    Ok(Block { statements })
-}
-
-pub fn try_parse_named_parameter<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, NamedParameter<'a>> {
-    let elem_name = stream.try_consume(TokenKind::Identifier, Required::No)?;
+pub fn try_parse_named_declaration<'a>(
+    stream: &mut TokenStream<'a>,
+    required: Required,
+) -> PartialParse<'a, NamedDeclaration<'a>> {
+    let elem_name = stream.try_consume(TokenKind::Identifier, required)?;
     stream.try_consume(TokenKind::Colon, Required::Yes)?;
-    let elem_type = try_parse_data_type(stream)?;
-    Ok(NamedParameter {
+    let elem_type = try_parse_data_type(stream, Required::Yes)?;
+    Ok(NamedDeclaration {
         name: elem_name.range,
         data_type: elem_type,
     })
 }
 
-pub fn try_parse_parameter_list<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, ParameterList<'a>> {
-    stream.try_consume(TokenKind::ParenOpen, Required::No)?;
-    let parameters = try_parse_zero_or_more(stream, Some(TokenKind::Comma), try_parse_named_parameter)?;
-    stream.try_consume(TokenKind::ParenClose, Required::Yes)?;
-    Ok(ParameterList { parameters })
+pub fn try_parse_definition_statement<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Statement<'a>> {
+    stream.try_consume(TokenKind::KwdLet, required)?;
+    let declaration = try_parse_named_declaration(stream, Required::Yes)?;
+    stream.try_consume(TokenKind::Assignment, Required::Yes)?;
+    let expression = try_parse_expr(stream, Required::Yes)?;
+    stream.try_consume(TokenKind::SemiColon, Required::Yes)?;
+    Ok(Statement::Definition { declaration, expression })
 }
 
-pub fn try_parse_import<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Import<'a>> {
-    stream.try_consume(TokenKind::KwdImport, Required::No)?;
+pub fn try_parse_assignment_statement<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Statement<'a>> {
+    let identifier = stream.try_consume(tokenizer::TokenKind::Identifier, required)?;
+    stream.try_consume(tokenizer::TokenKind::Assignment, Required::Yes)?;
+    let expression = try_parse_expr(stream, Required::Yes)?;
+    stream.try_consume(tokenizer::TokenKind::SemiColon, Required::Yes)?;
+    Ok(Statement::Assignment {
+        var_name: identifier.range,
+        expression,
+    })
+}
+
+pub fn try_parse_statement<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Statement<'a>> {
+    let initial_stream = stream.clone();
+    match stream.peek() {
+        Some(tokenizer::Token {
+            kind: tokenizer::TokenKind::KwdLet,
+            ..
+        }) => try_parse_definition_statement(stream, Required::Yes),
+        Some(tokenizer::Token {
+            kind: tokenizer::TokenKind::Identifier,
+            ..
+        }) => try_parse_assignment_statement(stream, Required::Yes),
+        _ => {
+            if required.is_yes() {
+                Err(SyntaxError {
+                    kind: PartialParseError::Unexpected {
+                        description: format!("Unknown start of statement"),
+                    },
+                    context: vec![],
+                    position: stream.peek(),
+                })
+            } else {
+                Err(SyntaxError {
+                    kind: PartialParseError::Unmatched {
+                        wanted: String::from("statement"),
+                    },
+                    context: vec![],
+                    position: stream.peek(),
+                })
+            }
+        }
+    }
+    .map_err(|e| e.with_context(format!("While parsing statement: {}", initial_stream.sample_source())))
+}
+
+pub fn try_parse_block<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Block<'a>> {
+    stream.try_consume(TokenKind::BraceOpen, required)?;
+    let statements = try_parse_zero_or_more(stream, None, try_parse_statement)?;
+    stream.try_consume(TokenKind::BraceClose, Required::Yes)?;
+    Ok(Block { statements })
+}
+
+pub fn try_parse_declaration_list<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, DeclarationList<'a>> {
+    stream.try_consume(TokenKind::ParenOpen, required)?;
+    let declarations = try_parse_zero_or_more(stream, Some(TokenKind::Comma), try_parse_named_declaration)?;
+    stream.try_consume(TokenKind::ParenClose, Required::Yes)?;
+    Ok(DeclarationList { declarations })
+}
+
+pub fn try_parse_import<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Import<'a>> {
+    stream.try_consume(TokenKind::KwdImport, required)?;
     let import_name = stream.try_consume(TokenKind::Identifier, Required::Yes)?;
     let mut import_path: Option<String> = None;
     if let Some(Token {
@@ -336,31 +393,27 @@ pub fn try_parse_import<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Im
     })
 }
 
-pub fn try_parse_proc<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Procedure<'a>> {
+pub fn try_parse_proc<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Procedure<'a>> {
     let initial_stream = stream.clone();
     inline!({
-        stream.try_consume(TokenKind::KwdProc, Required::No)?;
+        stream.try_consume(TokenKind::KwdProc, required)?;
         let proc_name = stream.try_consume(TokenKind::Identifier, Required::Yes)?;
-        let parameter_list = try_parse_parameter_list(stream)?;
-
-        let return_type = match stream.try_consume(TokenKind::ArrowSingle, Required::No) {
-            Ok(..) => try_parse_data_type(stream)?,
-            _ => void_type(),
-        };
-
-        let block = try_parse_block(stream)?;
+        let parameter_list = try_parse_declaration_list(stream, Required::Yes)?;
+        stream.try_consume(TokenKind::ArrowSingle, Required::Yes)?;
+        let return_list = try_parse_declaration_list(stream, Required::Yes)?;
+        let block = try_parse_block(stream, Required::Yes)?;
         Ok(Procedure {
             name: proc_name.range,
             parameter_list,
-            return_type,
+            return_list,
             block,
         })
     })
     .map_err(|op: SyntaxError<'a>| op.with_context(format!("While parsing function: {}", initial_stream.sample_source())))
 }
 
-pub fn try_parse_module<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Module<'a>> {
-    stream.try_consume(TokenKind::KwdModule, Required::No)?;
+pub fn try_parse_module<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Module<'a>> {
+    stream.try_consume(TokenKind::KwdModule, required)?;
     let mod_name = stream.try_consume(TokenKind::Identifier, Required::Yes)?;
     stream.try_consume(TokenKind::BraceOpen, Required::Yes)?;
     let imports = try_parse_zero_or_more(stream, None, try_parse_import)?;
