@@ -33,10 +33,10 @@ pub enum TokenKind {
     StringLiteral,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum TokenizingError {
+#[derive(Clone, Debug)]
+pub enum TokenizingError<'a> {
     UnexpectedEOF,
-    UnexpectedToken,
+    UnexpectedToken { cursor: core::str::Chars<'a> },
 }
 
 #[derive(Clone)]
@@ -121,7 +121,7 @@ impl<'a> std::fmt::Display for TokenKind {
 }
 
 impl<'a> Iterator for TokenIter<'a> {
-    type Item = Result<Token<'a>, TokenizingError>;
+    type Item = Result<Token<'a>, TokenizingError<'a>>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut state = TokenizerState::Initial;
@@ -158,7 +158,9 @@ impl<'a> Iterator for TokenIter<'a> {
                                 terminals: &[],
                             };
                         } else {
-                            return Some(Err(TokenizingError::UnexpectedToken));
+                            return Some(Err(TokenizingError::UnexpectedToken {
+                                cursor: self.remaining.clone(),
+                            }));
                         }
                     }
                 },

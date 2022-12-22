@@ -291,8 +291,8 @@ impl ProcedurePrototype {
         let signature = {
             let mut s = String::from(proc.name);
             s += " (";
-            for elem in &proc.input_defn.elements {
-                s += &format!("{}:", elem.name);
+            for p in &proc.parameter_list.parameters {
+                s += &format!("{}:", p.name);
             }
             s + ")"
         };

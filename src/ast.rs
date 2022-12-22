@@ -17,16 +17,16 @@ pub struct Import<'a> {
 
 pub struct Procedure<'a> {
     pub name: &'a str,
-    pub input_defn: TypeContainer<'a>,
-    pub return_defn: TypeContainer<'a>,
+    pub parameter_list: ParameterList<'a>,
+    pub return_type: DataType<'a>,
     pub block: Block<'a>,
 }
 
-pub struct TypeContainer<'a> {
-    pub elements: Vec<NamedElement<'a>>,
+pub struct ParameterList<'a> {
+    pub parameters: Vec<NamedParameter<'a>>,
 }
 
-pub struct NamedElement<'a> {
+pub struct NamedParameter<'a> {
     pub name: &'a str,
     pub data_type: DataType<'a>,
 }
@@ -38,7 +38,7 @@ pub struct Block<'a> {
 pub enum Statement<'a> {
     Definition {
         name: &'a str,
-        type_container: TypeContainer<'a>,
+        data_type: DataType<'a>,
         expression: Expression<'a>,
     },
 }
@@ -92,12 +92,12 @@ impl<'a> From<&Statement<'a>> for sexpr::Value {
         match v {
             Statement::Definition {
                 name,
-                type_container,
+                data_type,
                 expression,
             } => sexpr::Value::List(vec![
                 sexpr::Value::Symbol(String::from("defn")),
                 sexpr::Value::Symbol(String::from(*name)),
-                sexpr::Value::from(type_container),
+                sexpr::Value::from(data_type),
                 sexpr::Value::from(expression),
             ]),
         }
@@ -116,8 +116,8 @@ impl<'a> From<&Block<'a>> for sexpr::Value {
     }
 }
 
-impl<'a> From<&NamedElement<'a>> for sexpr::Value {
-    fn from(v: &NamedElement<'a>) -> Self {
+impl<'a> From<&NamedParameter<'a>> for sexpr::Value {
+    fn from(v: &NamedParameter<'a>) -> Self {
         sexpr::Value::List(vec![
             sexpr::Value::Symbol(String::from(v.name)),
             sexpr::Value::from(&v.data_type),
@@ -125,9 +125,9 @@ impl<'a> From<&NamedElement<'a>> for sexpr::Value {
     }
 }
 
-impl<'a> From<&TypeContainer<'a>> for sexpr::Value {
-    fn from(v: &TypeContainer<'a>) -> Self {
-        sexpr::Value::List(v.elements.iter().map(Into::into).collect())
+impl<'a> From<&ParameterList<'a>> for sexpr::Value {
+    fn from(v: &ParameterList<'a>) -> Self {
+        sexpr::Value::List(v.parameters.iter().map(Into::into).collect())
     }
 }
 
@@ -151,8 +151,8 @@ impl<'a> From<&Procedure<'a>> for sexpr::Value {
         sexpr::Value::List(vec![
             sexpr::Value::Symbol(String::from("proc")),
             sexpr::Value::Symbol(String::from(v.name)),
-            sexpr::Value::from(&v.input_defn),
-            sexpr::Value::from(&v.return_defn),
+            sexpr::Value::from(&v.parameter_list),
+            sexpr::Value::from(&v.return_type),
             sexpr::Value::from(&v.block),
         ])
     }

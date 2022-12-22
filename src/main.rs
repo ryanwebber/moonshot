@@ -32,10 +32,15 @@ impl<'a> From<parser::SyntaxError<'a>> for ReportableError {
     }
 }
 
-impl From<tokenizer::TokenizingError> for ReportableError {
-    fn from(_e: tokenizer::TokenizingError) -> Self {
-        ReportableError {
-            msg: String::from("Unexpected token"),
+impl<'a> From<tokenizer::TokenizingError<'a>> for ReportableError {
+    fn from(e: tokenizer::TokenizingError<'a>) -> Self {
+        match e {
+            tokenizer::TokenizingError::UnexpectedEOF => ReportableError {
+                msg: String::from("Unexpected end of source"),
+            },
+            tokenizer::TokenizingError::UnexpectedToken { cursor } => ReportableError {
+                msg: format!("Unexpected token: {}", cursor.peekable().peek().unwrap_or(&'?')),
+            },
         }
     }
 }
@@ -96,17 +101,14 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
 fn main() {
     let rope = indoc::indoc! {r#"
         module _ {
-            import sys;
-            import other from "./other.pf";
-
-            proc main (x: i1, y: i2) -> (z: i3) {
+            proc main () {
                 let abc: i15 = 78;
                 let x: i15 = (abc + 2);
                 let y: i15 = (1 + x);
                 let z: i15 = y;
             }
 
-            proc foo () -> () {
+            proc add (a: i15, b: i15) -> i15 {
                 let k: i15 = 0;
             }
         }

@@ -139,6 +139,10 @@ impl<'a> TokenStream<'a> {
     }
 }
 
+fn void_type<'a>() -> DataType<'a> {
+    DataType { name: "void" }
+}
+
 fn try_parse_zero_or_more<'a, T>(
     stream: &mut TokenStream<'a>,
     separator: Option<TokenKind>,
@@ -229,7 +233,9 @@ pub fn try_parse_expr<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Expr
 
     parsers
         .iter()
-        .map(|&p| p(stream).map_err(|op| op.with_context(format!("While parsing expression: {}", initial_stream.sample_source()))))
+        .map(|&p| {
+            p(stream).map_err(|op| op.with_context(format!("While parsing expression: {}", initial_stream.sample_source())))
+        })
         .find(|r| match r {
             Err(SyntaxError {
                 kind: PartialParseError::Unmatched { .. },
@@ -258,13 +264,13 @@ pub fn try_parse_statement<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a,
         stream.try_consume(TokenKind::KwdLet, Required::No)?;
         let var_name = stream.try_consume(TokenKind::Identifier, Required::Yes)?;
         stream.try_consume(TokenKind::Colon, Required::Yes)?;
-        let type_container = try_parse_type_container(stream)?;
+        let data_type = try_parse_data_type(stream)?;
         stream.try_consume(TokenKind::Assignment, Required::Yes)?;
         let expression = try_parse_expr(stream)?;
         stream.try_consume(TokenKind::SemiColon, Required::Yes)?;
         Ok(Statement::Definition {
             name: var_name.range,
-            type_container,
+            data_type,
             expression,
         })
     })
@@ -278,34 +284,21 @@ pub fn try_parse_block<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Blo
     Ok(Block { statements })
 }
 
-pub fn try_parse_named_element<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, NamedElement<'a>> {
+pub fn try_parse_named_parameter<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, NamedParameter<'a>> {
     let elem_name = stream.try_consume(TokenKind::Identifier, Required::No)?;
     stream.try_consume(TokenKind::Colon, Required::Yes)?;
     let elem_type = try_parse_data_type(stream)?;
-    Ok(NamedElement {
+    Ok(NamedParameter {
         name: elem_name.range,
         data_type: elem_type,
     })
 }
 
-pub fn try_parse_type_container<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, TypeContainer<'a>> {
-    match stream.try_consume(TokenKind::ParenOpen, Required::No) {
-        Ok(..) => {
-            let elements = try_parse_zero_or_more(stream, Some(TokenKind::Comma), try_parse_named_element)?;
-            stream.try_consume(TokenKind::ParenClose, Required::Yes)?;
-            Ok(TypeContainer { elements: elements })
-        }
-        Err(SyntaxError {
-            kind: PartialParseError::Unmatched { .. },
-            ..
-        }) => {
-            let data_type = try_parse_data_type(stream)?;
-            Ok(TypeContainer {
-                elements: vec![NamedElement { name: "_", data_type }],
-            })
-        }
-        Err(e) => Err(e),
-    }
+pub fn try_parse_parameter_list<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, ParameterList<'a>> {
+    stream.try_consume(TokenKind::ParenOpen, Required::No)?;
+    let parameters = try_parse_zero_or_more(stream, Some(TokenKind::Comma), try_parse_named_parameter)?;
+    stream.try_consume(TokenKind::ParenClose, Required::Yes)?;
+    Ok(ParameterList { parameters })
 }
 
 pub fn try_parse_import<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Import<'a>> {
@@ -313,7 +306,8 @@ pub fn try_parse_import<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Im
     let import_name = stream.try_consume(TokenKind::Identifier, Required::Yes)?;
     let mut import_path: Option<String> = None;
     if let Some(Token {
-        kind: TokenKind::KwdFrom, ..
+        kind: TokenKind::KwdFrom,
+        ..
     }) = stream.peek()
     {
         stream.try_consume(TokenKind::KwdFrom, Required::Yes)?;
@@ -324,7 +318,9 @@ pub fn try_parse_import<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Im
             }
             Err(e) => {
                 return Err(SyntaxError {
-                    kind: PartialParseError::Unexpected { description: e.to_string() },
+                    kind: PartialParseError::Unexpected {
+                        description: e.to_string(),
+                    },
                     position: stream.peek(),
                     context: vec![String::from("While parsing import path")],
                 })
@@ -345,14 +341,18 @@ pub fn try_parse_proc<'a>(stream: &mut TokenStream<'a>) -> PartialParse<'a, Proc
     inline!({
         stream.try_consume(TokenKind::KwdProc, Required::No)?;
         let proc_name = stream.try_consume(TokenKind::Identifier, Required::Yes)?;
-        let input_defn = try_parse_type_container(stream)?;
-        stream.try_consume(TokenKind::ArrowSingle, Required::Yes)?;
-        let return_defn = try_parse_type_container(stream)?;
+        let parameter_list = try_parse_parameter_list(stream)?;
+
+        let return_type = match stream.try_consume(TokenKind::ArrowSingle, Required::No) {
+            Ok(..) => try_parse_data_type(stream)?,
+            _ => void_type(),
+        };
+
         let block = try_parse_block(stream)?;
         Ok(Procedure {
             name: proc_name.range,
-            input_defn,
-            return_defn,
+            parameter_list,
+            return_type,
             block,
         })
     })
