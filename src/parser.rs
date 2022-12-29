@@ -191,41 +191,78 @@ fn try_parse_zero_or_more<'a, T>(
     }
 }
 
-fn try_parse_binary_op_expr<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Expression<'a>> {
-    stream.try_consume(TokenKind::ParenOpen, required)?;
-    let lhs = try_parse_expr(stream, Required::Yes)?;
-    stream.try_consume(TokenKind::OpAddition, Required::Yes)?;
-    let rhs = try_parse_expr(stream, Required::Yes)?;
-    stream.try_consume(TokenKind::ParenClose, Required::Yes)?;
-    Ok(Expression::BinOpExpression {
-        lhs: Box::new(lhs),
-        op: Operator::Addition,
-        rhs: Box::new(rhs),
+fn try_parse_argument_label<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, &'a str> {
+    stream.try_consume(TokenKind::Identifier, required).map(|token| token.range)
+}
+
+fn try_parse_function_signature<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, FunctionSignature> {
+    match stream.peek() {
+        Some(Token {
+            kind: TokenKind::Identifier,
+            range,
+            ..
+        }) => {
+            _ = stream.iter.next();
+            stream.try_consume(TokenKind::ParenOpen, Required::Yes)?;
+            let labels = try_parse_zero_or_more(stream, Some(TokenKind::Colon), try_parse_argument_label)?;
+            stream.try_consume(TokenKind::ParenClose, Required::Yes)?;
+
+            let args_with_labels: String = labels.iter().map(|label| format!("{}:", *label)).collect();
+            let signature = format!("{}({})", range, args_with_labels);
+            Ok(FunctionSignature::Named(signature))
+        }
+        Some(Token {
+            kind: TokenKind::OpAddition,
+            ..
+        }) => {
+            _ = stream.iter.next();
+            Ok(FunctionSignature::Symbolic(Operator::Addition))
+        }
+        Some(Token { range, .. }) => Err(SyntaxError {
+            kind: PartialParseError::Unexpected {
+                description: format!("Unparsable function signature: '{}'", range),
+            },
+            position: stream.peek(),
+            context: vec![],
+        }),
+        None => Err(SyntaxError {
+            kind: PartialParseError::Unexpected {
+                description: format!("Unexpected end of source. Expected function signature"),
+            },
+            position: None,
+            context: vec![],
+        }),
+    }
+    .map_err(|e| {
+        if required.is_yes() {
+            e
+        } else {
+            SyntaxError {
+                kind: PartialParseError::Unmatched {
+                    wanted: String::from("function signature"),
+                },
+                position: stream.peek(),
+                context: vec![],
+            }
+        }
     })
 }
 
-fn try_parse_var_access<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Expression<'a>> {
-    let base_identifier = stream.try_consume(TokenKind::Identifier, required)?;
-    let mut path: Vec<&'a str> = vec![base_identifier.range];
+fn try_parse_call_expr<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Expression<'a>> {
+    stream.try_consume(TokenKind::ParenOpen, required)?;
+    let function = try_parse_function_signature(stream, Required::Yes)?;
+    let arguments = try_parse_zero_or_more(stream, None, try_parse_expr)?;
+    stream.try_consume(TokenKind::ParenClose, Required::Yes)?;
 
-    // TODO: This doesn't create a proper AST representation for tuples
-    loop {
-        match stream.peek() {
-            Some(t) if t.kind == TokenKind::Dot => {
-                let next_identifier = stream.try_consume(TokenKind::Identifier, Required::Yes)?;
-                path.push(next_identifier.range);
-            }
-            _ => {
-                break;
-            }
-        };
-    }
+    Ok(Expression::CallExpression {
+        function,
+        arguments: arguments.into_iter().map(|arg| Box::new(arg)).collect(),
+    })
+}
 
-    if path.len() == 1 {
-        path.push("_")
-    }
-
-    Ok(Expression::VarAccess { path })
+fn try_parse_dereference<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Expression<'a>> {
+    let var_name = stream.try_consume(TokenKind::Identifier, required)?;
+    Ok(Expression::Dereference { name: var_name.range })
 }
 
 fn try_parse_numeric_literal_expr<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Expression<'a>> {
@@ -235,7 +272,7 @@ fn try_parse_numeric_literal_expr<'a>(stream: &mut TokenStream<'a>, required: Re
 
 pub fn try_parse_expr<'a>(stream: &mut TokenStream<'a>, required: Required) -> PartialParse<'a, Expression<'a>> {
     let initial_stream = stream.clone();
-    let parsers = [try_parse_binary_op_expr, try_parse_numeric_literal_expr, try_parse_var_access];
+    let parsers = [try_parse_numeric_literal_expr, try_parse_call_expr, try_parse_dereference];
 
     parsers
         .iter()

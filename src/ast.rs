@@ -47,17 +47,21 @@ pub enum Statement<'a> {
 }
 
 pub enum Expression<'a> {
-    BinOpExpression {
-        lhs: Box<Expression<'a>>,
-        op: Operator,
-        rhs: Box<Expression<'a>>,
+    CallExpression {
+        function: FunctionSignature,
+        arguments: Vec<Box<Expression<'a>>>,
+    },
+    Dereference {
+        name: &'a str,
     },
     NumberLiteralExpression {
         value: &'a str,
     },
-    VarAccess {
-        path: Vec<&'a str>,
-    },
+}
+
+pub enum FunctionSignature {
+    Named(String),
+    Symbolic(Operator),
 }
 
 pub enum Operator {
@@ -79,13 +83,21 @@ impl From<&Operator> for sexpr::Value {
 impl<'a> From<&Expression<'a>> for sexpr::Value {
     fn from(v: &Expression<'a>) -> Self {
         match v {
-            Expression::BinOpExpression { lhs, op, rhs } => {
-                sexpr::Value::List(vec![Into::into(&*op), Into::into(&**lhs), Into::into(&**rhs)])
-            }
+            Expression::CallExpression { function, arguments } => sexpr::Value::List(vec![
+                sexpr::Value::from(function),
+                sexpr::Value::List(arguments.iter().map(|arg| sexpr::Value::from(&**arg)).collect()),
+            ]),
+            Expression::Dereference { name } => sexpr::Value::Symbol(String::from(*name)),
             Expression::NumberLiteralExpression { value } => sexpr::Value::Number(String::from(*value)),
-            Expression::VarAccess { path } => {
-                sexpr::Value::List(path.iter().map(|p| sexpr::Value::Symbol(String::from(*p))).collect())
-            }
+        }
+    }
+}
+
+impl From<&FunctionSignature> for sexpr::Value {
+    fn from(function: &FunctionSignature) -> Self {
+        match function {
+            FunctionSignature::Named(name) => sexpr::Value::Symbol(name.to_string()),
+            FunctionSignature::Symbolic(operator) => sexpr::Value::from(operator),
         }
     }
 }
