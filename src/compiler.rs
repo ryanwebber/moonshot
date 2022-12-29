@@ -81,16 +81,39 @@ fn try_compile_expr(
     constant_pool: &mut ConstantPool,
 ) -> Result<ir::RVal, CompilerError> {
     match expr {
-        ast::Expression::BinOpExpression { lhs, op, rhs } => {
-            let lhs_ir = try_compile_expr(&*lhs, register_allocator, constant_pool)?;
-            let rhs_ir = try_compile_expr(&*rhs, register_allocator, constant_pool)?;
-            match op {
-                ast::Operator::Addition => Ok(ir::RVal::Add(ir::AddExpr {
-                    mode: ir::DataMode::SP1,
-                    lhs: Box::new(lhs_ir),
-                    rhs: Box::new(rhs_ir),
-                })),
+        ast::Expression::CallExpression {
+            function: ast::FunctionSignature::Symbolic(operator),
+            arguments,
+        } => match operator {
+            ast::Operator::Addition => {
+                if arguments.len() != 2 {
+                    todo!("Function param check failure")
+                } else {
+                    let lhs_ir = try_compile_expr(&arguments[0], register_allocator, constant_pool)?;
+                    let rhs_ir = try_compile_expr(&arguments[1], register_allocator, constant_pool)?;
+                    Ok(ir::RVal::Add(ir::AddExpr {
+                        mode: ir::DataMode::SP1,
+                        lhs: Box::new(lhs_ir),
+                        rhs: Box::new(rhs_ir),
+                    }))
+                }
             }
+        },
+        ast::Expression::CallExpression {
+            function: ast::FunctionSignature::Named(_signature),
+            ..
+        } => {
+            todo!("Function call")
+        }
+        ast::Expression::Dereference { name } => {
+            let reg = register_allocator.lookup(name).ok_or(CompilerError {
+                msg: format!("Use of undeclared variable '{}'", name),
+            })?;
+
+            Ok(ir::RVal::Reg(ir::RegExpr {
+                reg,
+                mode: ir::DataMode::SP1,
+            }))
         }
         ast::Expression::NumberLiteralExpression { value } => {
             // TODO: Support different binary types
@@ -107,21 +130,6 @@ fn try_compile_expr(
             let const_id = constant_pool.get_or_allocate(const_value);
 
             Ok(ir::RVal::Const(ir::ConstExpr { id: const_id }))
-        }
-        ast::Expression::VarAccess { path } => {
-            // TODO: support proper variable lookups
-            let path_component = path
-                .first()
-                .expect("var access should have been parsed with at least one path component");
-
-            let reg = register_allocator.lookup(path_component).ok_or(CompilerError {
-                msg: format!("Use of undeclared variable '{}'", path_component),
-            })?;
-
-            Ok(ir::RVal::Reg(ir::RegExpr {
-                reg,
-                mode: ir::DataMode::SP1,
-            }))
         }
     }
 }

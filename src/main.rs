@@ -102,21 +102,17 @@ fn main() {
     let rope = indoc::indoc! {r#"
         module _ {
             proc main () -> () {
-                let abc: i15 = 78;
+                let sum: i15 = (+ (+ 1 3) 2);
             }
 
-            proc add (a: i15, b: i15) -> (c: i15) {
-                c = (a + b);
+            proc foo (a: i15, b: i15) -> (c: i15) {
+                c = (+ a b);
             }
         }
     "#};
 
     match try_compile(rope) {
-        Ok(out) => {
-            println!("{}", out);
-        }
-        Err(e) => {
-            println!("{}", e);
-        }
+        Ok(out) => println!("{}", out),
+        Err(e) => println!("{}", e),
     }
 }
