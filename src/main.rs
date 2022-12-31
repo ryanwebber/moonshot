@@ -113,7 +113,13 @@ fn main() {
     //     }
     // "#};
 
-    let rope = "(1 + (2 + 3) + 4)";
+    let rope = indoc::indoc! {r#"
+        {
+            let x: i15 = 1 + (2 + 3) + 4;
+            let x: i15 = 1 + (2 + 3) + 4;
+            
+        }
+    "#};
 
     match try_compile(rope) {
         Ok(out) => println!("{}", out),

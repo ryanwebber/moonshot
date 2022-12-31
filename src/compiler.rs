@@ -2,6 +2,11 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use crate::ast;
+use crate::ast::AssignmentStatement;
+use crate::ast::BinaryExpression;
+use crate::ast::CallExpression;
+use crate::ast::Identifier;
+use crate::ast::NumberLiteral;
 use crate::ir;
 use crate::utils;
 
@@ -82,7 +87,7 @@ fn try_compile_expr(
     constant_pool: &mut ConstantPool,
 ) -> Result<ir::RVal, CompilerError> {
     match expr {
-        ast::Expression::BinOp { lhs, op, rhs } => {
+        ast::Expression::BinOp(BinaryExpression { lhs, op, rhs }) => {
             let lhs_ir = try_compile_expr(lhs, register_allocator, header, constant_pool)?;
             let rhs_ir = try_compile_expr(rhs, register_allocator, header, constant_pool)?;
             _ = op; // TODO: Suport all binary operatirs
@@ -92,9 +97,12 @@ fn try_compile_expr(
                 rhs: Box::new(rhs_ir),
             }))
         }
-        ast::Expression::Constant { literal } => {
+        ast::Expression::Call(CallExpression { identifier }) => {
+            todo!("Support for call expression: {}", identifier.name)
+        }
+        ast::Expression::Constant(NumberLiteral { value }) => {
             // TODO: Support different binary types
-            let value: i32 = literal.value.parse().map_err(|e| CompilerError {
+            let value: i32 = value.parse().map_err(|e| CompilerError {
                 msg: format!("Unexpected number format: {}", e),
             })?;
 
@@ -108,9 +116,9 @@ fn try_compile_expr(
 
             Ok(ir::RVal::Const(ir::ConstExpr { id: const_id }))
         }
-        ast::Expression::Dereference { identifier } => {
-            let reg = register_allocator.lookup(identifier.name).ok_or(CompilerError {
-                msg: format!("Use of undeclared variable '{}'", identifier.name),
+        ast::Expression::Dereference(Identifier { name }) => {
+            let reg = register_allocator.lookup(name).ok_or(CompilerError {
+                msg: format!("Use of undeclared variable '{}'", name),
             })?;
 
             Ok(ir::RVal::Reg(ir::RegExpr {
@@ -131,11 +139,13 @@ fn try_compile_proc_body<'a>(
 
     for statement in &proc.block.statements {
         match statement {
-            ast::Statement::Definition { declaration, expression } => {
+            ast::Statement::Definition(ast::DefinitionStatement {
+                identifier, expression, ..
+            }) => {
                 let reg = register_allocator
-                    .try_allocate_unused(declaration.name)
+                    .try_allocate_unused(identifier.name)
                     .map_err(|_| CompilerError {
-                        msg: format!("Variable '{}' already defined", declaration.name),
+                        msg: format!("Variable '{}' already defined", identifier.name),
                     })?;
 
                 let dest_reg_expr = ir::RegExpr {
@@ -147,9 +157,9 @@ fn try_compile_proc_body<'a>(
                 let set_inst = ir::Instruction::Set(ir::LVal::Reg(dest_reg_expr), expr_ir);
                 instructions.push(set_inst);
             }
-            ast::Statement::Assignment { var_name, expression } => {
-                let reg = register_allocator.lookup(var_name).ok_or(CompilerError {
-                    msg: format!("Use of undeclared variable '{}'", var_name),
+            ast::Statement::Assignment(AssignmentStatement { identifier, expression }) => {
+                let reg = register_allocator.lookup(identifier.name).ok_or(CompilerError {
+                    msg: format!("Use of undeclared variable '{}'", identifier.name),
                 })?;
 
                 let dest_reg_expr = ir::RegExpr {
@@ -185,12 +195,12 @@ fn try_compile_proc<'a>(
 
     // Pre-allocate parameters at the top of the workspace
     for p in &proc.parameter_list.declarations {
-        _ = register_allocator.try_allocate_unused(p.name);
+        _ = register_allocator.try_allocate_unused(p.identifier.name);
     }
 
     // Pre-allocate return slots at the top of the workspace
     for r in &proc.return_list.declarations {
-        _ = register_allocator.try_allocate_unused(r.name);
+        _ = register_allocator.try_allocate_unused(r.identifier.name);
     }
 
     let body = try_compile_proc_body(proc, &mut register_allocator, header, constant_pool)?;
@@ -327,7 +337,7 @@ impl ProcedurePrototype {
             let mut s = String::from(proc.name);
             s += "(";
             for p in &proc.parameter_list.declarations {
-                s += &format!("{}:", p.name);
+                s += &format!("{}:", p.identifier.name);
             }
             s + ")"
         };
