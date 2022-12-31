@@ -47,21 +47,25 @@ pub enum Statement<'a> {
 }
 
 pub enum Expression<'a> {
-    CallExpression {
-        function: FunctionSignature,
-        arguments: Vec<Box<Expression<'a>>>,
+    BinOp {
+        lhs: Box<Expression<'a>>,
+        op: Operator,
+        rhs: Box<Expression<'a>>,
+    },
+    Constant {
+        literal: NumberLiteral<'a>,
     },
     Dereference {
-        name: &'a str,
-    },
-    NumberLiteralExpression {
-        value: &'a str,
+        identifier: Identifier<'a>,
     },
 }
 
-pub enum FunctionSignature {
-    Named(String),
-    Symbolic(Operator),
+pub struct Identifier<'a> {
+    pub name: &'a str,
+}
+
+pub struct NumberLiteral<'a> {
+    pub value: &'a str,
 }
 
 pub enum Operator {
@@ -83,22 +87,26 @@ impl From<&Operator> for sexpr::Value {
 impl<'a> From<&Expression<'a>> for sexpr::Value {
     fn from(v: &Expression<'a>) -> Self {
         match v {
-            Expression::CallExpression { function, arguments } => sexpr::Value::List(vec![
-                sexpr::Value::from(function),
-                sexpr::Value::List(arguments.iter().map(|arg| sexpr::Value::from(&**arg)).collect()),
+            Expression::BinOp { lhs, rhs, op } => sexpr::Value::List(vec![
+                sexpr::Value::from(&**lhs),
+                sexpr::Value::from(op),
+                sexpr::Value::from(&**rhs),
             ]),
-            Expression::Dereference { name } => sexpr::Value::Symbol(String::from(*name)),
-            Expression::NumberLiteralExpression { value } => sexpr::Value::Number(String::from(*value)),
+            Expression::Constant { literal } => sexpr::Value::from(literal),
+            Expression::Dereference { identifier } => sexpr::Value::from(identifier),
         }
     }
 }
 
-impl From<&FunctionSignature> for sexpr::Value {
-    fn from(function: &FunctionSignature) -> Self {
-        match function {
-            FunctionSignature::Named(name) => sexpr::Value::Symbol(name.to_string()),
-            FunctionSignature::Symbolic(operator) => sexpr::Value::from(operator),
-        }
+impl<'a> From<&Identifier<'a>> for sexpr::Value {
+    fn from(v: &Identifier<'a>) -> Self {
+        sexpr::Value::Symbol(String::from(v.name))
+    }
+}
+
+impl<'a> From<&NumberLiteral<'a>> for sexpr::Value {
+    fn from(literal: &NumberLiteral) -> Self {
+        sexpr::Value::Number(String::from(literal.value))
     }
 }
 
