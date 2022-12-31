@@ -58,58 +58,62 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
         tokens?
     };
 
-    let parse = parser::try_parse_all(&tokens)?;
-    let mut ids = utils::Counter(ir::Id(0));
+    let _ = parser::delete_me(&tokens)?;
+    Ok(String::from("# Success!"))
 
-    let modules = {
-        let modules: Result<Vec<compiler::ModuleCompilation>, _> = parse
-            .modules
-            .iter()
-            .map(|module| {
-                compiler::check_and_build_header(module, &mut ids).map(|header| compiler::check_and_compile(module, header))?
-            })
-            .collect();
+    // let parse = parser::try_parse_all(&tokens)?;
+    // let mut ids = utils::Counter(ir::Id(0));
 
-        modules?
-    };
+    // let modules = {
+    //     let modules: Result<Vec<compiler::ModuleCompilation>, _> = parse
+    //         .modules
+    //         .iter()
+    //         .map(|module| {
+    //             compiler::check_and_build_header(module, &mut ids).map(|header| compiler::check_and_compile(module, header))?
+    //         })
+    //         .collect();
 
-    let program = compiler::package_modules(modules)?;
+    //     modules?
+    // };
 
-    println!("#");
-    println!("# PROCEDURE LIST");
-    println!("#");
+    // let program = compiler::package_modules(modules)?;
 
-    println!("");
+    // println!("#");
+    // println!("# PROCEDURE LIST");
+    // println!("#");
 
-    for (id, procdef) in &program.procedures {
-        println!("# [{}] {} {{", id, procdef.prototype.signature);
-        for instruction in &procdef.body.instructions {
-            println!("# \t{}", sexpr::Value::from(instruction));
-        }
-        println!("# }}\n");
-    }
+    // println!("");
 
-    let contents = {
-        generator::generate(&program)
-            .release_to_yul_assembly()
-            .expect("Unable to generate assembly source due to internal error")
-    };
+    // for (id, procdef) in &program.procedures {
+    //     println!("# [{}] {} {{", id, procdef.prototype.signature);
+    //     for instruction in &procdef.body.instructions {
+    //         println!("# \t{}", sexpr::Value::from(instruction));
+    //     }
+    //     println!("# }}\n");
+    // }
 
-    Ok(contents)
+    // let contents = {
+    //     generator::generate(&program)
+    //         .release_to_yul_assembly()
+    //         .expect("Unable to generate assembly source due to internal error")
+    // };
+
+    // Ok(contents)
 }
 
 fn main() {
-    let rope = indoc::indoc! {r#"
-        module _ {
-            proc main () -> () {
-                let sum: i15 = (+ (+ 1 3) 2);
-            }
+    // let rope = indoc::indoc! {r#"
+    //     module _ {
+    //         proc main() -> () {
+    //         }
 
-            proc foo (a: i15, b: i15) -> (c: i15) {
-                c = (+ a b);
-            }
-        }
-    "#};
+    //         proc foo(a: i15, b: i15) -> (c: i15) {
+    //             c = a + b + 1;
+    //         }
+    //     }
+    // "#};
+
+    let rope = "(1 + (2 + 3) + 4)";
 
     match try_compile(rope) {
         Ok(out) => println!("{}", out),

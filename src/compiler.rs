@@ -78,46 +78,23 @@ pub struct ProgramCompilation {
 fn try_compile_expr(
     expr: &ast::Expression,
     register_allocator: &mut RegistorAllocator,
+    header: &ModuleHeader,
     constant_pool: &mut ConstantPool,
 ) -> Result<ir::RVal, CompilerError> {
     match expr {
-        ast::Expression::CallExpression {
-            function: ast::FunctionSignature::Symbolic(operator),
-            arguments,
-        } => match operator {
-            ast::Operator::Addition => {
-                if arguments.len() != 2 {
-                    todo!("Function param check failure")
-                } else {
-                    let lhs_ir = try_compile_expr(&arguments[0], register_allocator, constant_pool)?;
-                    let rhs_ir = try_compile_expr(&arguments[1], register_allocator, constant_pool)?;
-                    Ok(ir::RVal::Add(ir::AddExpr {
-                        mode: ir::DataMode::SP1,
-                        lhs: Box::new(lhs_ir),
-                        rhs: Box::new(rhs_ir),
-                    }))
-                }
-            }
-        },
-        ast::Expression::CallExpression {
-            function: ast::FunctionSignature::Named(_signature),
-            ..
-        } => {
-            todo!("Function call")
-        }
-        ast::Expression::Dereference { name } => {
-            let reg = register_allocator.lookup(name).ok_or(CompilerError {
-                msg: format!("Use of undeclared variable '{}'", name),
-            })?;
-
-            Ok(ir::RVal::Reg(ir::RegExpr {
-                reg,
+        ast::Expression::BinOp { lhs, op, rhs } => {
+            let lhs_ir = try_compile_expr(lhs, register_allocator, header, constant_pool)?;
+            let rhs_ir = try_compile_expr(rhs, register_allocator, header, constant_pool)?;
+            _ = op; // TODO: Suport all binary operatirs
+            Ok(ir::RVal::Add(ir::AddExpr {
                 mode: ir::DataMode::SP1,
+                lhs: Box::new(lhs_ir),
+                rhs: Box::new(rhs_ir),
             }))
         }
-        ast::Expression::NumberLiteralExpression { value } => {
+        ast::Expression::Constant { literal } => {
             // TODO: Support different binary types
-            let value: i32 = value.parse().map_err(|e| CompilerError {
+            let value: i32 = literal.value.parse().map_err(|e| CompilerError {
                 msg: format!("Unexpected number format: {}", e),
             })?;
 
@@ -131,12 +108,23 @@ fn try_compile_expr(
 
             Ok(ir::RVal::Const(ir::ConstExpr { id: const_id }))
         }
+        ast::Expression::Dereference { identifier } => {
+            let reg = register_allocator.lookup(identifier.name).ok_or(CompilerError {
+                msg: format!("Use of undeclared variable '{}'", identifier.name),
+            })?;
+
+            Ok(ir::RVal::Reg(ir::RegExpr {
+                reg,
+                mode: ir::DataMode::SP1,
+            }))
+        }
     }
 }
 
 fn try_compile_proc_body<'a>(
     proc: &ast::Procedure<'a>,
     register_allocator: &mut RegistorAllocator,
+    header: &ModuleHeader,
     constant_pool: &mut ConstantPool,
 ) -> Result<ProcedureBody, CompilerError> {
     let mut instructions: Vec<ir::Instruction> = Vec::new();
@@ -155,7 +143,7 @@ fn try_compile_proc_body<'a>(
                     mode: ir::DataMode::SP1,
                 };
 
-                let expr_ir = try_compile_expr(expression, register_allocator, constant_pool)?;
+                let expr_ir = try_compile_expr(expression, register_allocator, header, constant_pool)?;
                 let set_inst = ir::Instruction::Set(ir::LVal::Reg(dest_reg_expr), expr_ir);
                 instructions.push(set_inst);
             }
@@ -169,7 +157,7 @@ fn try_compile_proc_body<'a>(
                     mode: ir::DataMode::SP1,
                 };
 
-                let expr_ir = try_compile_expr(expression, register_allocator, constant_pool)?;
+                let expr_ir = try_compile_expr(expression, register_allocator, header, constant_pool)?;
                 let set_inst = ir::Instruction::Set(ir::LVal::Reg(dest_reg_expr), expr_ir);
                 instructions.push(set_inst);
             }
@@ -205,7 +193,7 @@ fn try_compile_proc<'a>(
         _ = register_allocator.try_allocate_unused(r.name);
     }
 
-    let body = try_compile_proc_body(proc, &mut register_allocator, constant_pool)?;
+    let body = try_compile_proc_body(proc, &mut register_allocator, header, constant_pool)?;
     let layout = ProcedureLayout {
         placeholders: register_allocator.placeholders,
     };
@@ -337,7 +325,7 @@ impl ProcedurePrototype {
         let name = proc.name.to_string();
         let signature = {
             let mut s = String::from(proc.name);
-            s += " (";
+            s += "(";
             for p in &proc.parameter_list.declarations {
                 s += &format!("{}:", p.name);
             }
