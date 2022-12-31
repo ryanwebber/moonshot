@@ -27,7 +27,7 @@ pub struct DeclarationList<'a> {
 }
 
 pub struct NamedDeclaration<'a> {
-    pub name: &'a str,
+    pub identifier: Identifier<'a>,
     pub data_type: DataType<'a>,
 }
 
@@ -36,28 +36,19 @@ pub struct Block<'a> {
 }
 
 pub enum Statement<'a> {
-    Definition {
-        declaration: NamedDeclaration<'a>,
-        expression: Expression<'a>,
-    },
-    Assignment {
-        var_name: &'a str,
-        expression: Expression<'a>,
-    },
+    Assignment(AssignmentStatement<'a>),
+    Definition(DefinitionStatement<'a>),
 }
 
-pub enum Expression<'a> {
-    BinOp {
-        lhs: Box<Expression<'a>>,
-        op: Operator,
-        rhs: Box<Expression<'a>>,
-    },
-    Constant {
-        literal: NumberLiteral<'a>,
-    },
-    Dereference {
-        identifier: Identifier<'a>,
-    },
+pub struct AssignmentStatement<'a> {
+    pub identifier: Identifier<'a>,
+    pub expression: Expression<'a>,
+}
+
+pub struct DefinitionStatement<'a> {
+    pub identifier: Identifier<'a>,
+    pub data_type: DataType<'a>,
+    pub expression: Expression<'a>,
 }
 
 pub struct Identifier<'a> {
@@ -68,12 +59,29 @@ pub struct NumberLiteral<'a> {
     pub value: &'a str,
 }
 
+pub enum Expression<'a> {
+    BinOp(BinaryExpression<'a>),
+    Call(CallExpression<'a>),
+    Constant(NumberLiteral<'a>),
+    Dereference(Identifier<'a>),
+}
+
+pub struct BinaryExpression<'a> {
+    pub lhs: Box<Expression<'a>>,
+    pub op: Operator,
+    pub rhs: Box<Expression<'a>>,
+}
+
+pub struct CallExpression<'a> {
+    pub identifier: Identifier<'a>,
+}
+
 pub enum Operator {
     Addition,
 }
 
 pub struct DataType<'a> {
-    pub name: &'a str,
+    pub identifier: Identifier<'a>,
 }
 
 impl From<&Operator> for sexpr::Value {
@@ -87,14 +95,51 @@ impl From<&Operator> for sexpr::Value {
 impl<'a> From<&Expression<'a>> for sexpr::Value {
     fn from(v: &Expression<'a>) -> Self {
         match v {
-            Expression::BinOp { lhs, rhs, op } => sexpr::Value::List(vec![
-                sexpr::Value::from(&**lhs),
-                sexpr::Value::from(op),
-                sexpr::Value::from(&**rhs),
-            ]),
-            Expression::Constant { literal } => sexpr::Value::from(literal),
-            Expression::Dereference { identifier } => sexpr::Value::from(identifier),
+            Expression::BinOp(v) => sexpr::Value::from(v),
+            Expression::Call(v) => sexpr::Value::from(v),
+            Expression::Constant(v) => sexpr::Value::from(v),
+            Expression::Dereference(v) => sexpr::Value::from(v),
         }
+    }
+}
+
+impl<'a> From<BinaryExpression<'a>> for Expression<'a> {
+    fn from(v: BinaryExpression<'a>) -> Self {
+        Expression::BinOp(v)
+    }
+}
+
+impl<'a> From<CallExpression<'a>> for Expression<'a> {
+    fn from(v: CallExpression<'a>) -> Self {
+        Expression::Call(v)
+    }
+}
+
+impl<'a> From<NumberLiteral<'a>> for Expression<'a> {
+    fn from(v: NumberLiteral<'a>) -> Self {
+        Expression::Constant(v)
+    }
+}
+
+impl<'a> From<Identifier<'a>> for Expression<'a> {
+    fn from(v: Identifier<'a>) -> Self {
+        Expression::Dereference(v)
+    }
+}
+
+impl<'a> From<&BinaryExpression<'a>> for sexpr::Value {
+    fn from(v: &BinaryExpression<'a>) -> Self {
+        sexpr::Value::List(vec![
+            sexpr::Value::from(&*(v.lhs)),
+            sexpr::Value::from(&(v.op)),
+            sexpr::Value::from(&*(v.rhs)),
+        ])
+    }
+}
+
+impl<'a> From<&CallExpression<'a>> for sexpr::Value {
+    fn from(v: &CallExpression<'a>) -> Self {
+        sexpr::Value::List(vec![sexpr::Value::from(&v.identifier)])
     }
 }
 
@@ -113,23 +158,32 @@ impl<'a> From<&NumberLiteral<'a>> for sexpr::Value {
 impl<'a> From<&Statement<'a>> for sexpr::Value {
     fn from(v: &Statement<'a>) -> Self {
         match v {
-            Statement::Definition { declaration, expression } => sexpr::Value::List(vec![
-                sexpr::Value::Symbol(String::from("defn")),
-                sexpr::Value::from(declaration),
-                sexpr::Value::from(expression),
-            ]),
-            Statement::Assignment { var_name, expression } => sexpr::Value::List(vec![
-                sexpr::Value::Symbol(String::from("assign")),
-                sexpr::Value::Symbol(String::from(*var_name)),
-                sexpr::Value::from(expression),
-            ]),
+            Statement::Assignment(v) => sexpr::Value::from(v),
+            Statement::Definition(v) => sexpr::Value::from(v),
         }
+    }
+}
+
+impl<'a> From<&AssignmentStatement<'a>> for sexpr::Value {
+    fn from(v: &AssignmentStatement<'a>) -> Self {
+        sexpr::Value::List(vec![sexpr::Value::from(&v.identifier), sexpr::Value::from(&v.expression)])
+    }
+}
+
+impl<'a> From<&DefinitionStatement<'a>> for sexpr::Value {
+    fn from(v: &DefinitionStatement<'a>) -> Self {
+        sexpr::Value::List(vec![
+            sexpr::Value::Symbol(String::from("define")),
+            sexpr::Value::from(&v.identifier),
+            sexpr::Value::from(&v.data_type),
+            sexpr::Value::from(&v.expression),
+        ])
     }
 }
 
 impl<'a> From<&DataType<'a>> for sexpr::Value {
     fn from(v: &DataType<'a>) -> Self {
-        sexpr::Value::Symbol(String::from(v.name))
+        sexpr::Value::from(&v.identifier)
     }
 }
 
@@ -139,18 +193,15 @@ impl<'a> From<&Block<'a>> for sexpr::Value {
     }
 }
 
-impl<'a> From<&NamedDeclaration<'a>> for sexpr::Value {
-    fn from(v: &NamedDeclaration<'a>) -> Self {
-        sexpr::Value::List(vec![
-            sexpr::Value::Symbol(String::from(v.name)),
-            sexpr::Value::from(&v.data_type),
-        ])
-    }
-}
-
 impl<'a> From<&DeclarationList<'a>> for sexpr::Value {
     fn from(v: &DeclarationList<'a>) -> Self {
         sexpr::Value::List(v.declarations.iter().map(Into::into).collect())
+    }
+}
+
+impl<'a> From<&NamedDeclaration<'a>> for sexpr::Value {
+    fn from(v: &NamedDeclaration<'a>) -> Self {
+        sexpr::Value::List(vec![sexpr::Value::from(&v.identifier), sexpr::Value::from(&v.data_type)])
     }
 }
 
