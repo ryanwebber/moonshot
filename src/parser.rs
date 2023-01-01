@@ -213,11 +213,14 @@ struct IdentifierParser;
 struct NumberLiteralParser;
 struct StringLiteralParser;
 struct PrimaryExpressionParser;
+struct PostfixExpressionParser;
 struct AddativeExpressionParser;
 struct ExpressionParser;
 struct DataTypeParser;
 struct StatementParser;
 struct BlockParser;
+struct NamedArgumentParser;
+struct ArgumentListParser;
 struct NamedDeclarationParser;
 struct DeclarationListParser;
 struct ProcedureParser;
@@ -287,9 +290,26 @@ impl<'a> Parser<'a> for PrimaryExpressionParser {
     }
 }
 
+impl<'a> Parser<'a> for PostfixExpressionParser {
+    type Value = Expression<'a>;
+    fn try_parse_from(&self, stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
+        parse_first!(
+            parse_sequence!(IdentifierParser, ArgumentListParser).map(|v| {
+                Expression::Call(CallExpression {
+                    identifier: v.0,
+                    argument_list: v.1,
+                })
+            }),
+            PrimaryExpressionParser
+        )
+        .try_parse_from(stream)
+    }
+}
+
 impl<'a> Parser<'a> for AddativeExpressionParser {
     type Value = Expression<'a>;
     fn try_parse_from(&self, stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
+        const NEXT_PARSER: PostfixExpressionParser = PostfixExpressionParser;
         parse_left_recursive_sequence!(
             alpha:
                 parse_sequence!(
@@ -297,9 +317,9 @@ impl<'a> Parser<'a> for AddativeExpressionParser {
                         TokenParser(TokenKind::OpAddition).map(|_| Operator::Addition),
                         TokenParser(TokenKind::OpSubtraction).map(|_| Operator::Addition)
                     ),
-                    PrimaryExpressionParser
+                    NEXT_PARSER
                 ),
-            beta: PrimaryExpressionParser
+            beta: NEXT_PARSER
         )
         .try_parse_from(stream)
         .map(|(s, (mut expr, rest))| {
@@ -373,6 +393,43 @@ impl<'a> Parser<'a> for BlockParser {
             TokenParser(TokenKind::BraceClose)
         )
         .map(|v| Block { statements: v.1 })
+        .try_parse_from(stream)
+    }
+}
+
+impl<'a> Parser<'a> for NamedArgumentParser {
+    type Value = NamedArgument<'a>;
+    fn try_parse_from(&self, stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
+        parse_sequence!(IdentifierParser, TokenParser(TokenKind::Colon), ExpressionParser)
+            .map(|v| NamedArgument {
+                identifier: v.0,
+                expression: v.2,
+            })
+            .try_parse_from(stream)
+    }
+}
+
+impl<'a> Parser<'a> for ArgumentListParser {
+    type Value = ArgumentList<'a>;
+    fn try_parse_from(&self, stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
+        parse_first!(
+            parse_sequence!(TokenParser(TokenKind::ParenOpen), TokenParser(TokenKind::ParenClose)).map(|_| Vec::new()),
+            parse_sequence!(
+                TokenParser(TokenKind::ParenOpen),
+                NamedArgumentParser,
+                parse_zero_or_more!(parse_sequence!(TokenParser(TokenKind::Comma), NamedArgumentParser)),
+                TokenParser(TokenKind::ParenClose)
+            )
+            .map(|(_, first, rest, _)| {
+                let mut results = vec![first];
+                for (_, next) in rest.into_iter() {
+                    results.push(next)
+                }
+
+                results
+            })
+        )
+        .map(|v| ArgumentList { arguments: v })
         .try_parse_from(stream)
     }
 }

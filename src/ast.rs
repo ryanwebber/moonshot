@@ -31,6 +31,15 @@ pub struct NamedDeclaration<'a> {
     pub data_type: DataType<'a>,
 }
 
+pub struct ArgumentList<'a> {
+    pub arguments: Vec<NamedArgument<'a>>,
+}
+
+pub struct NamedArgument<'a> {
+    pub identifier: Identifier<'a>,
+    pub expression: Expression<'a>,
+}
+
 pub struct Block<'a> {
     pub statements: Vec<Statement<'a>>,
 }
@@ -78,6 +87,7 @@ pub struct BinaryExpression<'a> {
 
 pub struct CallExpression<'a> {
     pub identifier: Identifier<'a>,
+    pub argument_list: ArgumentList<'a>,
 }
 
 pub enum Operator {
@@ -143,7 +153,7 @@ impl<'a> From<&BinaryExpression<'a>> for sexpr::Value {
 
 impl<'a> From<&CallExpression<'a>> for sexpr::Value {
     fn from(v: &CallExpression<'a>) -> Self {
-        sexpr::Value::List(vec![sexpr::Value::from(&v.identifier)])
+        sexpr::Value::List(vec![sexpr::Value::from(&v.identifier), sexpr::Value::from(&v.argument_list)])
     }
 }
 
@@ -216,6 +226,18 @@ impl<'a> From<&DeclarationList<'a>> for sexpr::Value {
 impl<'a> From<&NamedDeclaration<'a>> for sexpr::Value {
     fn from(v: &NamedDeclaration<'a>) -> Self {
         sexpr::Value::List(vec![sexpr::Value::from(&v.identifier), sexpr::Value::from(&v.data_type)])
+    }
+}
+
+impl<'a> From<&ArgumentList<'a>> for sexpr::Value {
+    fn from(v: &ArgumentList<'a>) -> Self {
+        sexpr::Value::List(v.arguments.iter().map(|v| sexpr::Value::from(v)).collect())
+    }
+}
+
+impl<'a> From<&NamedArgument<'a>> for sexpr::Value {
+    fn from(v: &NamedArgument<'a>) -> Self {
+        sexpr::Value::List(vec![sexpr::Value::from(&v.identifier), sexpr::Value::from(&v.expression)])
     }
 }
 

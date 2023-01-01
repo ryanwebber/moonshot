@@ -97,8 +97,16 @@ fn try_compile_expr(
                 rhs: Box::new(rhs_ir),
             }))
         }
-        ast::Expression::Call(CallExpression { identifier }) => {
-            todo!("Support for call expression: {}", identifier.name)
+        ast::Expression::Call(CallExpression { .. }) => {
+            let const_value = ir::ConstValue::Float {
+                base: 55,
+                exponent: 0,
+                precision: ir::Precision::Single,
+            };
+
+            let const_id = constant_pool.get_or_allocate(const_value);
+
+            Ok(ir::RVal::Const(ir::ConstExpr { id: const_id }))
         }
         ast::Expression::Constant(NumberLiteral { value }) => {
             // TODO: Support different binary types
