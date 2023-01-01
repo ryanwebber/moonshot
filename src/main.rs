@@ -58,10 +58,10 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
         tokens?
     };
 
-    let _ = parser::delete_me(&tokens)?;
+    let parse = parser::try_parse_all(&tokens)?;
+    println!("Got: {}", sexpr::Value::from(&parse));
     Ok(String::from("# Success!"))
 
-    // let parse = parser::try_parse_all(&tokens)?;
     // let mut ids = utils::Counter(ir::Id(0));
 
     // let modules = {
@@ -114,11 +114,16 @@ fn main() {
     // "#};
 
     let rope = indoc::indoc! {r#"
-        {
-            let x: i15 = 1 + (2 + 3) + 4;
-            let x: i15 = 1 + (2 + 3) + 4;
-            
+    module _ {
+        import sys;
+
+        proc main () -> () {
         }
+
+        proc add (a: i15, b: i15) -> (c: i15) {
+            c = a + b;
+        }
+    }
     "#};
 
     match try_compile(rope) {
