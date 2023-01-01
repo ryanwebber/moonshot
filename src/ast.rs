@@ -1,22 +1,22 @@
 use crate::sexpr;
 
-pub struct Parse<'a> {
+pub struct Root<'a> {
     pub modules: Vec<Module<'a>>,
 }
 
 pub struct Module<'a> {
-    pub name: &'a str,
+    pub identifier: Identifier<'a>,
     pub imports: Vec<Import<'a>>,
-    pub procs: Vec<Procedure<'a>>,
+    pub procedures: Vec<Procedure<'a>>,
 }
 
 pub struct Import<'a> {
-    pub name: &'a str,
-    pub path: Option<String>,
+    pub identifier: Identifier<'a>,
+    pub path: Option<StringLiteral<'a>>,
 }
 
 pub struct Procedure<'a> {
-    pub name: &'a str,
+    pub identifier: Identifier<'a>,
     pub parameter_list: DeclarationList<'a>,
     pub return_list: DeclarationList<'a>,
     pub block: Block<'a>,
@@ -56,6 +56,10 @@ pub struct Identifier<'a> {
 }
 
 pub struct NumberLiteral<'a> {
+    pub value: &'a str,
+}
+
+pub struct StringLiteral<'a> {
     pub value: &'a str,
 }
 
@@ -155,6 +159,12 @@ impl<'a> From<&NumberLiteral<'a>> for sexpr::Value {
     }
 }
 
+impl<'a> From<&StringLiteral<'a>> for sexpr::Value {
+    fn from(literal: &StringLiteral) -> Self {
+        sexpr::Value::String(String::from(literal.value))
+    }
+}
+
 impl<'a> From<&Statement<'a>> for sexpr::Value {
     fn from(v: &Statement<'a>) -> Self {
         match v {
@@ -166,7 +176,11 @@ impl<'a> From<&Statement<'a>> for sexpr::Value {
 
 impl<'a> From<&AssignmentStatement<'a>> for sexpr::Value {
     fn from(v: &AssignmentStatement<'a>) -> Self {
-        sexpr::Value::List(vec![sexpr::Value::from(&v.identifier), sexpr::Value::from(&v.expression)])
+        sexpr::Value::List(vec![
+            sexpr::Value::Symbol(String::from("set")),
+            sexpr::Value::from(&v.identifier),
+            sexpr::Value::from(&v.expression),
+        ])
     }
 }
 
@@ -209,11 +223,11 @@ impl<'a> From<&Import<'a>> for sexpr::Value {
     fn from(v: &Import<'a>) -> Self {
         let mut list = vec![
             sexpr::Value::Symbol(String::from("import")),
-            sexpr::Value::Symbol(String::from(v.name)),
+            sexpr::Value::from(&v.identifier),
         ];
 
         if let Some(path) = &v.path {
-            list.push(sexpr::Value::String(String::from(path)));
+            list.push(sexpr::Value::from(path));
         }
 
         sexpr::Value::List(list)
@@ -224,7 +238,7 @@ impl<'a> From<&Procedure<'a>> for sexpr::Value {
     fn from(v: &Procedure<'a>) -> Self {
         sexpr::Value::List(vec![
             sexpr::Value::Symbol(String::from("proc")),
-            sexpr::Value::Symbol(String::from(v.name)),
+            sexpr::Value::from(&v.identifier),
             sexpr::Value::from(&v.parameter_list),
             sexpr::Value::from(&v.return_list),
             sexpr::Value::from(&v.block),
@@ -236,15 +250,15 @@ impl<'a> From<&Module<'a>> for sexpr::Value {
     fn from(v: &Module<'a>) -> Self {
         sexpr::Value::List(vec![
             sexpr::Value::Symbol(String::from("module")),
-            sexpr::Value::Symbol(String::from(v.name)),
+            sexpr::Value::from(&v.identifier),
             sexpr::Value::List(v.imports.iter().map(Into::into).collect()),
-            sexpr::Value::List(v.procs.iter().map(Into::into).collect()),
+            sexpr::Value::List(v.procedures.iter().map(Into::into).collect()),
         ])
     }
 }
 
-impl<'a> From<&Parse<'a>> for sexpr::Value {
-    fn from(v: &Parse<'a>) -> Self {
+impl<'a> From<&Root<'a>> for sexpr::Value {
+    fn from(v: &Root<'a>) -> Self {
         sexpr::Value::List(v.modules.iter().map(Into::into).collect())
     }
 }

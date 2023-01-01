@@ -223,7 +223,7 @@ pub fn check_and_build_header<'a>(
         procedures: HashMap::new(),
     };
 
-    for proc in &module.procs {
+    for proc in &module.procedures {
         let prototype = ProcedurePrototype::from(proc);
         let id = ids.generate_id();
         header.procedures.insert(prototype.signature.clone(), (id, prototype));
@@ -235,7 +235,7 @@ pub fn check_and_build_header<'a>(
 pub fn check_and_compile<'a>(module: &ast::Module<'a>, header: ModuleHeader) -> Result<ModuleCompilation, CompilerError> {
     let mut constant_pool = ConstantPool::new();
     let procedures: Result<Vec<_>, CompilerError> = module
-        .procs
+        .procedures
         .iter()
         .map(|proc| try_compile_proc(proc, &header, &mut constant_pool))
         .collect();
@@ -243,7 +243,7 @@ pub fn check_and_compile<'a>(module: &ast::Module<'a>, header: ModuleHeader) -> 
     Ok(ModuleCompilation {
         constants: constant_pool.mapping,
         header,
-        module_name: String::from(module.name),
+        module_name: String::from(module.identifier.name),
         procedures: procedures?,
     })
 }
@@ -332,9 +332,9 @@ impl ConstantPool {
 
 impl ProcedurePrototype {
     pub fn from(proc: &ast::Procedure) -> ProcedurePrototype {
-        let name = proc.name.to_string();
+        let name = proc.identifier.name.to_string();
         let signature = {
-            let mut s = String::from(proc.name);
+            let mut s = String::from(proc.identifier.name);
             s += "(";
             for p in &proc.parameter_list.declarations {
                 s += &format!("{}:", p.identifier.name);

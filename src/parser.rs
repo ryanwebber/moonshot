@@ -2,7 +2,6 @@ use std::marker::PhantomData;
 use std::slice::Iter;
 
 use crate::ast::*;
-use crate::sexpr;
 use crate::tokenizer::*;
 
 #[derive(Clone)]
@@ -74,6 +73,27 @@ macro_rules! parse_first {
             EmbeddedParser { f, _phantom: PhantomData }
         }
     }
+}
+
+macro_rules! parse_optional {
+    ($parser:expr) => {{
+        let f: fn(TokenStream<'a>) -> Result<(TokenStream<'a>, _), SyntaxError<'a>> =
+            |stream| match ($parser).try_parse_from(stream.clone()) {
+                Ok((s, value)) => Ok((s, Some(value))),
+                Err(e) => {
+                    if e.position.offset > stream.offset {
+                        Err(e)
+                    } else {
+                        Ok((stream, None))
+                    }
+                }
+            };
+
+        EmbeddedParser {
+            f,
+            _phantom: PhantomData,
+        }
+    }};
 }
 
 // Parses a non-left-recursive sequence
@@ -191,23 +211,31 @@ impl<'a> Parser<'a> for TokenParser {
 
 struct IdentifierParser;
 struct NumberLiteralParser;
+struct StringLiteralParser;
 struct PrimaryExpressionParser;
 struct AddativeExpressionParser;
 struct ExpressionParser;
 struct DataTypeParser;
 struct StatementParser;
 struct BlockParser;
+struct NamedDeclarationParser;
+struct DeclarationListParser;
+struct ProcedureParser;
+struct ImportParser;
+struct ModuleParser;
+struct RootParser;
 
 impl<'a> Parser<'a> for IdentifierParser {
     type Value = Identifier<'a>;
     fn try_parse_from(&self, mut stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
+        let position = stream.clone();
         match stream.next() {
             Some(Token {
                 kind: TokenKind::Identifier,
                 range,
                 ..
             }) => Ok((stream, Self::Value { name: range })),
-            _ => Err(SyntaxError::new(stream.clone()).with_context(format!("Expected identifier"))),
+            _ => Err(SyntaxError::new(position).with_context(format!("Expected identifier"))),
         }
     }
 }
@@ -215,13 +243,29 @@ impl<'a> Parser<'a> for IdentifierParser {
 impl<'a> Parser<'a> for NumberLiteralParser {
     type Value = NumberLiteral<'a>;
     fn try_parse_from(&self, mut stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
+        let position = stream.clone();
         match stream.next() {
             Some(Token {
                 kind: TokenKind::Number,
                 range,
                 ..
             }) => Ok((stream, Self::Value { value: range })),
-            _ => Err(SyntaxError::new(stream.clone()).with_context(format!("Expected number literal"))),
+            _ => Err(SyntaxError::new(position).with_context(format!("Expected number literal"))),
+        }
+    }
+}
+
+impl<'a> Parser<'a> for StringLiteralParser {
+    type Value = StringLiteral<'a>;
+    fn try_parse_from(&self, mut stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
+        let position = stream.clone();
+        match stream.next() {
+            Some(Token {
+                kind: TokenKind::StringLiteral,
+                range,
+                ..
+            }) => Ok((stream, Self::Value { value: range })),
+            _ => Err(SyntaxError::new(position).with_context(format!("Expected string literal"))),
         }
     }
 }
@@ -292,19 +336,27 @@ impl<'a> Parser<'a> for StatementParser {
     type Value = Statement<'a>;
     fn try_parse_from(&self, stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
         parse_sequence!(
-            parse_first!(parse_sequence!(
-                TokenParser(TokenKind::KwdLet),
-                IdentifierParser,
-                TokenParser(TokenKind::Colon),
-                DataTypeParser,
-                TokenParser(TokenKind::Assignment),
-                ExpressionParser
-            )
-            .map(|v| Statement::Definition(DefinitionStatement {
-                identifier: v.1,
-                data_type: v.3,
-                expression: v.5
-            }))),
+            parse_first!(
+                parse_sequence!(
+                    TokenParser(TokenKind::KwdLet),
+                    IdentifierParser,
+                    TokenParser(TokenKind::Colon),
+                    DataTypeParser,
+                    TokenParser(TokenKind::Assignment),
+                    ExpressionParser
+                )
+                .map(|v| Statement::Definition(DefinitionStatement {
+                    identifier: v.1,
+                    data_type: v.3,
+                    expression: v.5
+                })),
+                parse_sequence!(IdentifierParser, TokenParser(TokenKind::Assignment), ExpressionParser).map(|v| {
+                    Statement::Assignment(AssignmentStatement {
+                        identifier: v.0,
+                        expression: v.2,
+                    })
+                })
+            ),
             TokenParser(TokenKind::SemiColon)
         )
         .map(|v| v.0)
@@ -322,6 +374,110 @@ impl<'a> Parser<'a> for BlockParser {
         )
         .map(|v| Block { statements: v.1 })
         .try_parse_from(stream)
+    }
+}
+
+impl<'a> Parser<'a> for NamedDeclarationParser {
+    type Value = NamedDeclaration<'a>;
+    fn try_parse_from(&self, stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
+        parse_sequence!(IdentifierParser, TokenParser(TokenKind::Colon), DataTypeParser)
+            .map(|v| NamedDeclaration {
+                identifier: v.0,
+                data_type: v.2,
+            })
+            .try_parse_from(stream)
+    }
+}
+
+impl<'a> Parser<'a> for DeclarationListParser {
+    type Value = DeclarationList<'a>;
+    fn try_parse_from(&self, stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
+        parse_first!(
+            parse_sequence!(TokenParser(TokenKind::ParenOpen), TokenParser(TokenKind::ParenClose)).map(|_| Vec::new()),
+            parse_sequence!(
+                TokenParser(TokenKind::ParenOpen),
+                NamedDeclarationParser,
+                parse_zero_or_more!(parse_sequence!(TokenParser(TokenKind::Comma), NamedDeclarationParser)),
+                TokenParser(TokenKind::ParenClose)
+            )
+            .map(|(_, first, rest, _)| {
+                let mut results = vec![first];
+                for (_, next) in rest.into_iter() {
+                    results.push(next)
+                }
+
+                results
+            })
+        )
+        .map(|v| DeclarationList { declarations: v })
+        .try_parse_from(stream)
+    }
+}
+
+impl<'a> Parser<'a> for ProcedureParser {
+    type Value = Procedure<'a>;
+    fn try_parse_from(&self, stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
+        parse_sequence!(
+            TokenParser(TokenKind::KwdProc),
+            IdentifierParser,
+            DeclarationListParser,
+            TokenParser(TokenKind::ArrowSingle),
+            DeclarationListParser,
+            BlockParser
+        )
+        .map(|v| Procedure {
+            identifier: v.1,
+            parameter_list: v.2,
+            return_list: v.4,
+            block: v.5,
+        })
+        .try_parse_from(stream)
+    }
+}
+
+impl<'a> Parser<'a> for ImportParser {
+    type Value = Import<'a>;
+    fn try_parse_from(&self, stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
+        parse_sequence!(
+            TokenParser(TokenKind::KwdImport),
+            IdentifierParser,
+            parse_optional!(parse_sequence!(TokenParser(TokenKind::KwdFrom), StringLiteralParser)),
+            TokenParser(TokenKind::SemiColon)
+        )
+        .map(|v| Import {
+            identifier: v.1,
+            path: v.2.map(|f| f.1),
+        })
+        .try_parse_from(stream)
+    }
+}
+
+impl<'a> Parser<'a> for ModuleParser {
+    type Value = Module<'a>;
+    fn try_parse_from(&self, stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
+        parse_sequence!(
+            TokenParser(TokenKind::KwdModule),
+            IdentifierParser,
+            TokenParser(TokenKind::BraceOpen),
+            parse_zero_or_more!(ImportParser),
+            parse_zero_or_more!(ProcedureParser),
+            TokenParser(TokenKind::BraceClose)
+        )
+        .map(|v| Module {
+            identifier: v.1,
+            imports: v.3,
+            procedures: v.4,
+        })
+        .try_parse_from(stream)
+    }
+}
+
+impl<'a> Parser<'a> for RootParser {
+    type Value = Root<'a>;
+    fn try_parse_from(&self, stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
+        parse_zero_or_more!(ModuleParser)
+            .map(|v| Root { modules: v })
+            .try_parse_from(stream)
     }
 }
 
@@ -343,14 +499,15 @@ impl<'a> std::fmt::Display for SyntaxError<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.position.peek() {
             Some(..) => {
-                writeln!(f, "At: {}", self.position.sample_source())?;
+                writeln!(f, "At:\n  {}", self.position.sample_source())?;
             }
             None => {
                 writeln!(f, "At: <end of source>")?;
             }
         }
 
-        writeln!(f, "Syntax error")?;
+        writeln!(f)?;
+        writeln!(f, "Syntax error:")?;
         for (i, ctx) in self.context.iter().enumerate().take(30) {
             write!(f, "  {: <1$}", "", i)?;
             writeln!(f, "{}", ctx)?;
@@ -382,24 +539,21 @@ impl<'a> TokenStream<'a> {
     fn sample_source(&self) -> String {
         match self.iter.clone().next() {
             Some(token) => {
-                let source: String = token.rest.chars().take(24).take_while(|c| *c != '\r' && *c != '\n').collect();
-                format!("{} <...>", source)
+                let source: String = token.rest.chars().take(80).take_while(|c| *c != '\r' && *c != '\n').collect();
+                format!("{}", source)
             }
             None => String::from("<^Z>"),
         }
     }
 }
 
-pub fn delete_me<'a>(tokens: &'a [Token<'a>]) -> Result<Block<'a>, SyntaxError<'a>> {
-    let v = BlockParser.try_parse_from(TokenStream::new(&tokens)).map(|(_, fs)| fs)?;
-    println!("Got: {}", sexpr::Value::from(&v));
-    Ok(v)
+pub fn try_parse_from<'a>(stream: &mut TokenStream<'a>) -> ParseResult<'a, Root<'a>> {
+    RootParser.try_parse_from(stream.clone())
 }
 
-pub fn try_parse_from<'a>(_stream: &mut TokenStream<'a>) -> ParseResult<'a, Parse<'a>> {
-    todo!()
-}
-
-pub fn try_parse_all<'a>(tokens: &'a [Token<'a>]) -> Result<Parse, SyntaxError<'a>> {
-    try_parse_from(&mut TokenStream::new(&tokens)).map(|(_, parse)| parse)
+pub fn try_parse_all<'a>(tokens: &'a [Token<'a>]) -> Result<Root, SyntaxError<'a>> {
+    try_parse_from(&mut TokenStream::new(&tokens)).and_then(|(stream, parse)| match stream.peek() {
+        Some(token) => Err(SyntaxError::new(stream).with_context(format!("Unexpected: {}", token.range))),
+        None => Ok(parse),
+    })
 }
