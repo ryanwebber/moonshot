@@ -2,12 +2,8 @@ use std::collections::HashMap;
 use std::hash::Hash;
 
 use crate::ast;
-use crate::ast::AssignmentStatement;
-use crate::ast::BinaryExpression;
-use crate::ast::CallExpression;
-use crate::ast::Identifier;
-use crate::ast::NumberLiteral;
 use crate::ir;
+use crate::ir::CallExpr;
 use crate::utils;
 
 pub struct PackagingError {
@@ -80,6 +76,18 @@ pub struct ProgramCompilation {
     pub procedures: Vec<(ir::Id, ProcedureDefinition)>,
 }
 
+fn to_function_signature<'a, I>(name: &'a str, arg_names: I) -> String
+where
+    I: Iterator<Item = &'a str>,
+{
+    let mut s = String::from(name);
+    s += "(";
+    for arg_name in arg_names {
+        s += &format!("{}:", arg_name);
+    }
+    s + ")"
+}
+
 fn try_compile_expr(
     expr: &ast::Expression,
     register_allocator: &mut RegistorAllocator,
@@ -87,7 +95,7 @@ fn try_compile_expr(
     constant_pool: &mut ConstantPool,
 ) -> Result<ir::RVal, CompilerError> {
     match expr {
-        ast::Expression::BinOp(BinaryExpression { lhs, op, rhs }) => {
+        ast::Expression::BinOp(ast::BinaryExpression { lhs, op, rhs }) => {
             let lhs_ir = try_compile_expr(lhs, register_allocator, header, constant_pool)?;
             let rhs_ir = try_compile_expr(rhs, register_allocator, header, constant_pool)?;
             _ = op; // TODO: Suport all binary operatirs
@@ -97,18 +105,7 @@ fn try_compile_expr(
                 rhs: Box::new(rhs_ir),
             }))
         }
-        ast::Expression::Call(CallExpression { .. }) => {
-            let const_value = ir::ConstValue::Float {
-                base: 55,
-                exponent: 0,
-                precision: ir::Precision::Single,
-            };
-
-            let const_id = constant_pool.get_or_allocate(const_value);
-
-            Ok(ir::RVal::Const(ir::ConstExpr { id: const_id }))
-        }
-        ast::Expression::Constant(NumberLiteral { value }) => {
+        ast::Expression::Constant(ast::NumberLiteral { value }) => {
             // TODO: Support different binary types
             let value: i32 = value.parse().map_err(|e| CompilerError {
                 msg: format!("Unexpected number format: {}", e),
@@ -124,7 +121,7 @@ fn try_compile_expr(
 
             Ok(ir::RVal::Const(ir::ConstExpr { id: const_id }))
         }
-        ast::Expression::Dereference(Identifier { name }) => {
+        ast::Expression::Dereference(ast::Identifier { name }) => {
             let reg = register_allocator.lookup(name).ok_or(CompilerError {
                 msg: format!("Use of undeclared variable '{}'", name),
             })?;
@@ -133,6 +130,39 @@ fn try_compile_expr(
                 reg,
                 mode: ir::DataMode::SP1,
             }))
+        }
+        ast::Expression::Postfix(ast::PostfixExpression {
+            lhs,
+            operation: ast::PostfixOperation::Call(argument_list),
+        }) => {
+            let call_symbol: &ast::Identifier = {
+                match &**lhs {
+                    ast::Expression::Dereference(identifier) => Ok(identifier),
+                    _ => Err(CompilerError {
+                        msg: format!("Call expressions can only be applied to functions"),
+                    }),
+                }
+            }?;
+
+            let function_signature = to_function_signature(
+                call_symbol.name,
+                argument_list.arguments.iter().map(|arg| arg.identifier.name),
+            );
+
+            match header.procedures.get(&function_signature) {
+                Some((id, ..)) => Ok(ir::RVal::Call(CallExpr { id: id.clone() })),
+                None => Err(CompilerError {
+                    msg: format!("Function not found: {}", call_symbol.name),
+                }),
+            }
+        }
+        ast::Expression::Postfix(ast::PostfixExpression {
+            lhs,
+            operation: ast::PostfixOperation::Dereference(identifier),
+        }) => {
+            _ = lhs;
+            _ = identifier;
+            todo!("Implement dereference")
         }
     }
 }
@@ -165,7 +195,7 @@ fn try_compile_proc_body<'a>(
                 let set_inst = ir::Instruction::Set(ir::LVal::Reg(dest_reg_expr), expr_ir);
                 instructions.push(set_inst);
             }
-            ast::Statement::Assignment(AssignmentStatement { identifier, expression }) => {
+            ast::Statement::Assignment(ast::AssignmentStatement { identifier, expression }) => {
                 let reg = register_allocator.lookup(identifier.name).ok_or(CompilerError {
                     msg: format!("Use of undeclared variable '{}'", identifier.name),
                 })?;
@@ -341,14 +371,7 @@ impl ConstantPool {
 impl ProcedurePrototype {
     pub fn from(proc: &ast::Procedure) -> ProcedurePrototype {
         let name = proc.identifier.name.to_string();
-        let signature = {
-            let mut s = String::from(proc.identifier.name);
-            s += "(";
-            for p in &proc.parameter_list.declarations {
-                s += &format!("{}:", p.identifier.name);
-            }
-            s + ")"
-        };
+        let signature = to_function_signature(&name, proc.parameter_list.declarations.iter().map(|p| p.identifier.name));
 
         let parameters: Vec<_> = proc
             .parameter_list

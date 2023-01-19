@@ -85,6 +85,12 @@ impl<'a> AssemblyGenerator<'a> {
                 self.code.push_instruction(agc::Instruction::CAE, Some(stack.pop().into()));
                 self.code.push_instruction(agc::Instruction::ADS, Some(stack.top().into()));
             }
+            ir::RVal::Call(expr) => {
+                let label = Label::with(expr.id, LabelType::Procedure);
+                let operand: Operand = Slot::from(label).into();
+                self.code.push_instruction(agc::Instruction::TC, Some(operand));
+                todo!("Move call result to a stack");
+            }
             ir::RVal::Const(expr) => {
                 let const_slot: Slot = Label::with(expr.id, LabelType::Const).into();
                 self.code.push_instruction(agc::Instruction::CAF, Some(const_slot.into()));

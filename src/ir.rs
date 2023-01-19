@@ -14,6 +14,7 @@ pub enum LVal {
 pub enum RVal {
     Reg(RegExpr),
     Add(AddExpr),
+    Call(CallExpr),
     Const(ConstExpr),
 }
 
@@ -34,17 +35,17 @@ pub struct AddExpr {
     pub rhs: Box<RVal>,
 }
 
+pub struct CallExpr {
+    pub id: Id,
+}
+
 pub struct ConstExpr {
     pub id: Id,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConstValue {
-    Float {
-        base: i32,
-        exponent: i32,
-        precision: Precision,
-    },
+    Float { base: i32, exponent: i32, precision: Precision },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -101,6 +102,7 @@ impl From<&RVal> for sexpr::Value {
     fn from(v: &RVal) -> Self {
         match v {
             RVal::Add(expr) => sexpr::Value::from(expr),
+            RVal::Call(expr) => sexpr::Value::from(expr),
             RVal::Const(expr) => sexpr::Value::from(expr),
             RVal::Reg(expr) => sexpr::Value::from(expr),
         }
@@ -127,12 +129,15 @@ impl From<&AddExpr> for sexpr::Value {
     }
 }
 
+impl From<&CallExpr> for sexpr::Value {
+    fn from(v: &CallExpr) -> Self {
+        sexpr::Value::List(vec![sexpr::Value::Symbol(String::from("call")), sexpr::Value::from(v.id)])
+    }
+}
+
 impl From<&ConstExpr> for sexpr::Value {
     fn from(v: &ConstExpr) -> Self {
-        sexpr::Value::List(vec![
-            sexpr::Value::Symbol(String::from("const")),
-            sexpr::Value::from(v.id),
-        ])
+        sexpr::Value::List(vec![sexpr::Value::Symbol(String::from("const")), sexpr::Value::from(v.id)])
     }
 }
 

@@ -63,10 +63,10 @@ fn try_compile<'a>(rope: &'a str) -> Result<String, ReportableError> {
     println!("#");
     println!("# AST");
     println!("#");
+    println!();
     for line in sexpr::Value::from(&parse).to_string().lines() {
         println!("# {}", line)
     }
-    println!("#");
     println!();
 
     let mut ids = utils::Counter(ir::Id(0));
@@ -112,7 +112,7 @@ fn main() {
     let rope = indoc::indoc! {r#"
         module _ {
             proc main () -> () {
-                let x: i15 = add(a: 1, b: 2);
+                let x: i15 = 1 + add(a: 2, b: 3);
             }
 
             proc add (a: i15, b: i15) -> (c: i15) {
@@ -122,7 +122,9 @@ fn main() {
     "#};
 
     match try_compile(rope) {
-        Ok(out) => println!("{}", out),
+        Ok(out) => {
+            println!("{}", out);
+        }
         Err(e) => println!("{}", e),
     }
 }

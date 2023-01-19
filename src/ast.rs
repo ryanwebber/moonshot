@@ -74,9 +74,14 @@ pub struct StringLiteral<'a> {
 
 pub enum Expression<'a> {
     BinOp(BinaryExpression<'a>),
-    Call(CallExpression<'a>),
     Constant(NumberLiteral<'a>),
     Dereference(Identifier<'a>),
+    Postfix(PostfixExpression<'a>),
+}
+
+pub struct PostfixExpression<'a> {
+    pub lhs: Box<Expression<'a>>,
+    pub operation: PostfixOperation<'a>,
 }
 
 pub struct BinaryExpression<'a> {
@@ -85,13 +90,13 @@ pub struct BinaryExpression<'a> {
     pub rhs: Box<Expression<'a>>,
 }
 
-pub struct CallExpression<'a> {
-    pub identifier: Identifier<'a>,
-    pub argument_list: ArgumentList<'a>,
-}
-
 pub enum Operator {
     Addition,
+}
+
+pub enum PostfixOperation<'a> {
+    Call(ArgumentList<'a>),
+    Dereference(Identifier<'a>),
 }
 
 pub struct DataType<'a> {
@@ -110,9 +115,9 @@ impl<'a> From<&Expression<'a>> for sexpr::Value {
     fn from(v: &Expression<'a>) -> Self {
         match v {
             Expression::BinOp(v) => sexpr::Value::from(v),
-            Expression::Call(v) => sexpr::Value::from(v),
             Expression::Constant(v) => sexpr::Value::from(v),
             Expression::Dereference(v) => sexpr::Value::from(v),
+            Expression::Postfix(v) => sexpr::Value::from(v),
         }
     }
 }
@@ -123,9 +128,9 @@ impl<'a> From<BinaryExpression<'a>> for Expression<'a> {
     }
 }
 
-impl<'a> From<CallExpression<'a>> for Expression<'a> {
-    fn from(v: CallExpression<'a>) -> Self {
-        Expression::Call(v)
+impl<'a> From<PostfixExpression<'a>> for Expression<'a> {
+    fn from(v: PostfixExpression<'a>) -> Self {
+        Expression::Postfix(v)
     }
 }
 
@@ -151,9 +156,25 @@ impl<'a> From<&BinaryExpression<'a>> for sexpr::Value {
     }
 }
 
-impl<'a> From<&CallExpression<'a>> for sexpr::Value {
-    fn from(v: &CallExpression<'a>) -> Self {
-        sexpr::Value::List(vec![sexpr::Value::from(&v.identifier), sexpr::Value::from(&v.argument_list)])
+impl<'a> From<&PostfixExpression<'a>> for sexpr::Value {
+    fn from(v: &PostfixExpression<'a>) -> Self {
+        sexpr::Value::List(vec![
+            match &v.operation {
+                PostfixOperation::Call(..) => sexpr::Value::Symbol(String::from("call")),
+                PostfixOperation::Dereference(..) => sexpr::Value::Symbol(String::from(".")),
+            },
+            sexpr::Value::from(&*v.lhs),
+            sexpr::Value::from(&v.operation),
+        ])
+    }
+}
+
+impl<'a> From<&PostfixOperation<'a>> for sexpr::Value {
+    fn from(v: &PostfixOperation<'a>) -> Self {
+        match v {
+            PostfixOperation::Call(x) => sexpr::Value::from(x),
+            PostfixOperation::Dereference(x) => sexpr::Value::from(x),
+        }
     }
 }
 

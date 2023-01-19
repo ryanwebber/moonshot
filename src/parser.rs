@@ -290,18 +290,39 @@ impl<'a> Parser<'a> for PrimaryExpressionParser {
     }
 }
 
+#[rustfmt::skip]
 impl<'a> Parser<'a> for PostfixExpressionParser {
     type Value = Expression<'a>;
     fn try_parse_from(&self, stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
-        parse_first!(
-            parse_sequence!(IdentifierParser, ArgumentListParser).map(|v| {
-                Expression::Call(CallExpression {
-                    identifier: v.0,
-                    argument_list: v.1,
-                })
-            }),
-            PrimaryExpressionParser
+        parse_first!(parse_left_recursive_sequence!(
+            alpha:
+                parse_first!(
+                    parse_sequence!
+                        (TokenParser(TokenKind::ParenOpen),
+                        TokenParser(TokenKind::ParenClose)
+                    ).map(|_| PostfixOperation::Call(ArgumentList { arguments: Vec::new() })),
+                    parse_sequence!(
+                        TokenParser(TokenKind::ParenOpen),
+                        ArgumentListParser,
+                        TokenParser(TokenKind::ParenClose)
+                    ).map(|v| PostfixOperation::Call(v.1)),
+                    parse_sequence!(
+                        TokenParser(TokenKind::Dot),
+                        IdentifierParser
+                    ).map(|v| PostfixOperation::Dereference(v.1))
+                ),
+            beta: PrimaryExpressionParser
         )
+        .map(|(mut expr, postfixes)| {
+            for postfix in postfixes.into_iter() {
+                expr = Expression::Postfix(PostfixExpression {
+                    lhs: Box::new(expr),
+                    operation: postfix,
+                });
+            }
+
+            expr
+        }))
         .try_parse_from(stream)
     }
 }
@@ -412,24 +433,16 @@ impl<'a> Parser<'a> for NamedArgumentParser {
 impl<'a> Parser<'a> for ArgumentListParser {
     type Value = ArgumentList<'a>;
     fn try_parse_from(&self, stream: TokenStream<'a>) -> ParseResult<'a, Self::Value> {
-        parse_first!(
-            parse_sequence!(TokenParser(TokenKind::ParenOpen), TokenParser(TokenKind::ParenClose)).map(|_| Vec::new()),
-            parse_sequence!(
-                TokenParser(TokenKind::ParenOpen),
-                NamedArgumentParser,
-                parse_zero_or_more!(parse_sequence!(TokenParser(TokenKind::Comma), NamedArgumentParser)),
-                TokenParser(TokenKind::ParenClose)
-            )
-            .map(|(_, first, rest, _)| {
-                let mut results = vec![first];
-                for (_, next) in rest.into_iter() {
-                    results.push(next)
-                }
-
-                results
-            })
+        parse_left_recursive_sequence!(
+            alpha: parse_sequence!(
+                TokenParser(TokenKind::Comma), NamedArgumentParser
+            ).map(|v| v.1),
+            beta: NamedArgumentParser
         )
-        .map(|v| ArgumentList { arguments: v })
+        .map(|(first, mut rest)| {
+            rest.insert(0, first);
+            ArgumentList { arguments: rest }
+        })
         .try_parse_from(stream)
     }
 }
