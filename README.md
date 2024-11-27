@@ -17,18 +17,47 @@ and compiler checks.
 ## Example
 
 ```
-module _ {
-    import sys;
+// main.mns
+inc "progs/write_mem.mns" as write_mem
+inc "progs/test_multistate.mns" as test_multistate
 
-    proc main () -> () {
-        let abc: i15 = 78;
-        foo(bar: abc)
-    }
-
-    proc foo (bar: i15) -> () {
-        // ...
+verb 99 "debug" {
+    noun 01 "write" {
+        .entry = write_mem::main;
     }
 }
+
+verb 98 "test" {
+    noun 00 "multistate" {
+        .entry = test_multistate::main;
+    }
+}
+
+// progs/write_mem.mns
+state main () [
+    addr: i15 = 0;
+    value: i15 = 0;
+] {
+    $dsky::read_value (&addr);
+    $dsky::read_value (&value);
+    $mem::write (addr, value);
+}
+
+// progs/test_multistate.mns
+state main () [] {
+    .goto ::other_state (0)
+}
+
+state other_state (count: i15) [
+    count: i15 = count;
+] {
+    .goto ::other_state(::calculate_next(count));
+}
+
+sub calculate_next (current: i15) -> i15 {
+    return current + 1;
+}
+
 ```
 
 ## Getting Started
