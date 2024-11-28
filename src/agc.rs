@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum Instruction {
     AD,
@@ -13,20 +15,21 @@ pub enum Instruction {
     TS,
 }
 
-impl std::fmt::Display for Instruction {
+impl Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Instruction::*;
         match self {
-            Self::AD => write!(f, "AD"),
-            Self::ADS => write!(f, "ADS"),
-            Self::CAE => write!(f, "CAE"),
-            Self::CAF => write!(f, "CAF"),
-            Self::DEC => write!(f, "DEC"),
-            Self::ERASE => write!(f, "ERASE"),
-            Self::NOOP => write!(f, "NOOP"),
-            Self::RETURN => write!(f, "RETURN"),
-            Self::TC => write!(f, "TC"),
-            Self::TCA => write!(f, "TCA"),
-            Self::TS => write!(f, "TS"),
+            AD => write!(f, "AD"),
+            ADS => write!(f, "ADS"),
+            CAE => write!(f, "CAE"),
+            CAF => write!(f, "CAF"),
+            DEC => write!(f, "DEC"),
+            ERASE => write!(f, "ERASE"),
+            NOOP => write!(f, "NOOP"),
+            RETURN => write!(f, "RETURN"),
+            TC => write!(f, "TC"),
+            TCA => write!(f, "TCA"),
+            TS => write!(f, "TS"),
         }
     }
 }

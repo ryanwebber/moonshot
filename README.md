@@ -3,17 +3,6 @@
 A compiler toolchain targeting the Apollo Guidance Computer. This is a hobby
 project started to learn more about the AGC architecture and software.
 
-Eventually, it would be fantastic if a guidance program written and compiled by moonshot
-could be loaded into an AGC simulation and successfully perform an automated moon landing.
-
-### Progress
-
-The compiler has enough features to compile a program with a single main function. Only
-the 15-bit integer type is supported, and addition is the only arithmetic operation
-supported. While this set of features isn't enough to do anything useful, a decent amount
-of compiler architecture is implemented in order to begin implementing more language features
-and compiler checks.
-
 ## Example
 
 ```
@@ -21,16 +10,16 @@ and compiler checks.
 inc "progs/write_mem.mns" as write_mem
 inc "progs/test_multistate.mns" as test_multistate
 
-verb 99 "debug" {
-    noun 01 "write" {
-        .entry = write_mem::main;
-    }
+prog {
+    .verb = 99;
+    .noun = 98;
+    .entry = write_mem::main;
 }
 
-verb 98 "test" {
-    noun 00 "multistate" {
-        .entry = test_multistate::main;
-    }
+prog {
+    .verb = 10;
+    .noun = 97;
+    .entry = test_multistate::main;
 }
 
 // progs/write_mem.mns
@@ -38,20 +27,22 @@ state main () [
     addr: i15 = 0;
     value: i15 = 0;
 ] {
-    $dsky::read_value (&addr);
-    $dsky::read_value (&value);
-    $mem::write (addr, value);
+    addr = $dsky::read_value();
+    value = $dsky::read_value();
+    $mem::write(addr: addr, value: value);
 }
 
 // progs/test_multistate.mns
 state main () [] {
-    .goto ::other_state (0)
+    goto other_state(count: 0);
 }
 
 state other_state (count: i15) [
     count: i15 = count;
 ] {
-    .goto ::other_state(::calculate_next(count));
+    $dsky::write_value(register: 0, value: count);
+    yield $timer::wait(duration: 10);
+    goto other_state(count: calculate_next(current: count));
 }
 
 sub calculate_next (current: i15) -> i15 {

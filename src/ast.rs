@@ -1,307 +1,78 @@
-use crate::sexpr;
-
-pub struct Root<'a> {
-    pub modules: Vec<Module<'a>>,
+#[derive(Debug, Clone)]
+pub struct ProgramFragment {
+    pub directives: Vec<Directive>,
 }
 
-pub struct Module<'a> {
-    pub identifier: Identifier<'a>,
-    pub imports: Vec<Import<'a>>,
-    pub procedures: Vec<Procedure<'a>>,
+#[derive(Debug, Clone)]
+pub enum Directive {
+    Include {
+        path: String,
+        alias: String,
+    },
+    UserProgram {
+        spec: Vec<SpecEntry>,
+    },
+    State {
+        name: String,
+        parameters: Vec<ValueDeclaration>,
+        values: Vec<ValueDefinition>,
+        body: Block,
+    },
+    Subroutine {
+        name: String,
+        parameters: Vec<ValueDeclaration>,
+        body: Block,
+    },
 }
 
-pub struct Import<'a> {
-    pub identifier: Identifier<'a>,
-    pub path: Option<StringLiteral<'a>>,
+#[derive(Debug, Clone)]
+pub struct Block {
+    pub statements: Vec<Statement>,
 }
 
-pub struct Procedure<'a> {
-    pub identifier: Identifier<'a>,
-    pub parameter_list: DeclarationList<'a>,
-    pub return_list: DeclarationList<'a>,
-    pub block: Block<'a>,
+#[derive(Debug, Clone)]
+pub enum Statement {
+    Definition(ValueDefinition),
+    Expression(Expression),
 }
 
-pub struct DeclarationList<'a> {
-    pub declarations: Vec<NamedDeclaration<'a>>,
+#[derive(Debug, Clone)]
+pub struct ValueDeclaration {
+    pub identifier: String,
+    pub value_type: String,
 }
 
-pub struct NamedDeclaration<'a> {
-    pub identifier: Identifier<'a>,
-    pub data_type: DataType<'a>,
+#[derive(Debug, Clone)]
+pub struct ValueDefinition {
+    pub declaration: ValueDeclaration,
+    pub expression: Expression,
 }
 
-pub struct ArgumentList<'a> {
-    pub arguments: Vec<NamedArgument<'a>>,
+#[derive(Debug, Clone)]
+pub enum Expression {
+    FunctionCall {
+        function: ValueIdentifier,
+        arguments: Vec<Argument>,
+    },
+    NumberLiteral(i16),
+    StringLiteral(String),
+    VariableReference(ValueIdentifier),
 }
 
-pub struct NamedArgument<'a> {
-    pub identifier: Identifier<'a>,
-    pub expression: Expression<'a>,
+#[derive(Debug, Clone)]
+pub struct Argument {
+    pub name: String,
+    pub expression: Expression,
 }
 
-pub struct Block<'a> {
-    pub statements: Vec<Statement<'a>>,
+#[derive(Debug, Clone)]
+pub struct SpecEntry {
+    pub property: String,
+    pub expression: Expression,
 }
 
-pub enum Statement<'a> {
-    Assignment(AssignmentStatement<'a>),
-    Definition(DefinitionStatement<'a>),
-}
-
-pub struct AssignmentStatement<'a> {
-    pub identifier: Identifier<'a>,
-    pub expression: Expression<'a>,
-}
-
-pub struct DefinitionStatement<'a> {
-    pub identifier: Identifier<'a>,
-    pub data_type: DataType<'a>,
-    pub expression: Expression<'a>,
-}
-
-pub struct Identifier<'a> {
-    pub name: &'a str,
-}
-
-pub struct NumberLiteral<'a> {
-    pub value: &'a str,
-}
-
-pub struct StringLiteral<'a> {
-    pub value: &'a str,
-}
-
-pub enum Expression<'a> {
-    BinOp(BinaryExpression<'a>),
-    Constant(NumberLiteral<'a>),
-    Dereference(Identifier<'a>),
-    Postfix(PostfixExpression<'a>),
-}
-
-pub struct PostfixExpression<'a> {
-    pub lhs: Box<Expression<'a>>,
-    pub operation: PostfixOperation<'a>,
-}
-
-pub struct BinaryExpression<'a> {
-    pub lhs: Box<Expression<'a>>,
-    pub op: Operator,
-    pub rhs: Box<Expression<'a>>,
-}
-
-pub enum Operator {
-    Addition,
-}
-
-pub enum PostfixOperation<'a> {
-    Call(ArgumentList<'a>),
-    Dereference(Identifier<'a>),
-}
-
-pub struct DataType<'a> {
-    pub identifier: Identifier<'a>,
-}
-
-impl From<&Operator> for sexpr::Value {
-    fn from(v: &Operator) -> Self {
-        match v {
-            Operator::Addition => sexpr::Value::Symbol(String::from("+")),
-        }
-    }
-}
-
-impl<'a> From<&Expression<'a>> for sexpr::Value {
-    fn from(v: &Expression<'a>) -> Self {
-        match v {
-            Expression::BinOp(v) => sexpr::Value::from(v),
-            Expression::Constant(v) => sexpr::Value::from(v),
-            Expression::Dereference(v) => sexpr::Value::from(v),
-            Expression::Postfix(v) => sexpr::Value::from(v),
-        }
-    }
-}
-
-impl<'a> From<BinaryExpression<'a>> for Expression<'a> {
-    fn from(v: BinaryExpression<'a>) -> Self {
-        Expression::BinOp(v)
-    }
-}
-
-impl<'a> From<PostfixExpression<'a>> for Expression<'a> {
-    fn from(v: PostfixExpression<'a>) -> Self {
-        Expression::Postfix(v)
-    }
-}
-
-impl<'a> From<NumberLiteral<'a>> for Expression<'a> {
-    fn from(v: NumberLiteral<'a>) -> Self {
-        Expression::Constant(v)
-    }
-}
-
-impl<'a> From<Identifier<'a>> for Expression<'a> {
-    fn from(v: Identifier<'a>) -> Self {
-        Expression::Dereference(v)
-    }
-}
-
-impl<'a> From<&BinaryExpression<'a>> for sexpr::Value {
-    fn from(v: &BinaryExpression<'a>) -> Self {
-        sexpr::Value::List(vec![
-            sexpr::Value::from(&*(v.lhs)),
-            sexpr::Value::from(&(v.op)),
-            sexpr::Value::from(&*(v.rhs)),
-        ])
-    }
-}
-
-impl<'a> From<&PostfixExpression<'a>> for sexpr::Value {
-    fn from(v: &PostfixExpression<'a>) -> Self {
-        sexpr::Value::List(vec![
-            match &v.operation {
-                PostfixOperation::Call(..) => sexpr::Value::Symbol(String::from("call")),
-                PostfixOperation::Dereference(..) => sexpr::Value::Symbol(String::from(".")),
-            },
-            sexpr::Value::from(&*v.lhs),
-            sexpr::Value::from(&v.operation),
-        ])
-    }
-}
-
-impl<'a> From<&PostfixOperation<'a>> for sexpr::Value {
-    fn from(v: &PostfixOperation<'a>) -> Self {
-        match v {
-            PostfixOperation::Call(x) => sexpr::Value::from(x),
-            PostfixOperation::Dereference(x) => sexpr::Value::from(x),
-        }
-    }
-}
-
-impl<'a> From<&Identifier<'a>> for sexpr::Value {
-    fn from(v: &Identifier<'a>) -> Self {
-        sexpr::Value::Symbol(String::from(v.name))
-    }
-}
-
-impl<'a> From<&NumberLiteral<'a>> for sexpr::Value {
-    fn from(literal: &NumberLiteral) -> Self {
-        sexpr::Value::Number(String::from(literal.value))
-    }
-}
-
-impl<'a> From<&StringLiteral<'a>> for sexpr::Value {
-    fn from(literal: &StringLiteral) -> Self {
-        sexpr::Value::String(String::from(literal.value))
-    }
-}
-
-impl<'a> From<&Statement<'a>> for sexpr::Value {
-    fn from(v: &Statement<'a>) -> Self {
-        match v {
-            Statement::Assignment(v) => sexpr::Value::from(v),
-            Statement::Definition(v) => sexpr::Value::from(v),
-        }
-    }
-}
-
-impl<'a> From<&AssignmentStatement<'a>> for sexpr::Value {
-    fn from(v: &AssignmentStatement<'a>) -> Self {
-        sexpr::Value::List(vec![
-            sexpr::Value::Symbol(String::from("set")),
-            sexpr::Value::from(&v.identifier),
-            sexpr::Value::from(&v.expression),
-        ])
-    }
-}
-
-impl<'a> From<&DefinitionStatement<'a>> for sexpr::Value {
-    fn from(v: &DefinitionStatement<'a>) -> Self {
-        sexpr::Value::List(vec![
-            sexpr::Value::Symbol(String::from("define")),
-            sexpr::Value::from(&v.identifier),
-            sexpr::Value::from(&v.data_type),
-            sexpr::Value::from(&v.expression),
-        ])
-    }
-}
-
-impl<'a> From<&DataType<'a>> for sexpr::Value {
-    fn from(v: &DataType<'a>) -> Self {
-        sexpr::Value::from(&v.identifier)
-    }
-}
-
-impl<'a> From<&Block<'a>> for sexpr::Value {
-    fn from(v: &Block<'a>) -> Self {
-        sexpr::Value::List(v.statements.iter().map(Into::into).collect())
-    }
-}
-
-impl<'a> From<&DeclarationList<'a>> for sexpr::Value {
-    fn from(v: &DeclarationList<'a>) -> Self {
-        sexpr::Value::List(v.declarations.iter().map(Into::into).collect())
-    }
-}
-
-impl<'a> From<&NamedDeclaration<'a>> for sexpr::Value {
-    fn from(v: &NamedDeclaration<'a>) -> Self {
-        sexpr::Value::List(vec![sexpr::Value::from(&v.identifier), sexpr::Value::from(&v.data_type)])
-    }
-}
-
-impl<'a> From<&ArgumentList<'a>> for sexpr::Value {
-    fn from(v: &ArgumentList<'a>) -> Self {
-        sexpr::Value::List(v.arguments.iter().map(|v| sexpr::Value::from(v)).collect())
-    }
-}
-
-impl<'a> From<&NamedArgument<'a>> for sexpr::Value {
-    fn from(v: &NamedArgument<'a>) -> Self {
-        sexpr::Value::List(vec![sexpr::Value::from(&v.identifier), sexpr::Value::from(&v.expression)])
-    }
-}
-
-impl<'a> From<&Import<'a>> for sexpr::Value {
-    fn from(v: &Import<'a>) -> Self {
-        let mut list = vec![
-            sexpr::Value::Symbol(String::from("import")),
-            sexpr::Value::from(&v.identifier),
-        ];
-
-        if let Some(path) = &v.path {
-            list.push(sexpr::Value::from(path));
-        }
-
-        sexpr::Value::List(list)
-    }
-}
-
-impl<'a> From<&Procedure<'a>> for sexpr::Value {
-    fn from(v: &Procedure<'a>) -> Self {
-        sexpr::Value::List(vec![
-            sexpr::Value::Symbol(String::from("proc")),
-            sexpr::Value::from(&v.identifier),
-            sexpr::Value::from(&v.parameter_list),
-            sexpr::Value::from(&v.return_list),
-            sexpr::Value::from(&v.block),
-        ])
-    }
-}
-
-impl<'a> From<&Module<'a>> for sexpr::Value {
-    fn from(v: &Module<'a>) -> Self {
-        sexpr::Value::List(vec![
-            sexpr::Value::Symbol(String::from("module")),
-            sexpr::Value::from(&v.identifier),
-            sexpr::Value::List(v.imports.iter().map(Into::into).collect()),
-            sexpr::Value::List(v.procedures.iter().map(Into::into).collect()),
-        ])
-    }
-}
-
-impl<'a> From<&Root<'a>> for sexpr::Value {
-    fn from(v: &Root<'a>) -> Self {
-        sexpr::Value::List(v.modules.iter().map(Into::into).collect())
-    }
+#[derive(Debug, Clone)]
+pub enum ValueIdentifier {
+    Implicit(String),
+    Namespaced(String, String),
 }

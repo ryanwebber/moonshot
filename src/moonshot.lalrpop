@@ -1,0 +1,165 @@
+use lalrpop_util::ParseError;
+
+use super::SemanticError;
+use super::ast;
+
+grammar;
+
+extern {
+    type Error = SemanticError;
+    type Location = usize;
+}
+
+pub ProgramFragment: ast::ProgramFragment = {
+    <Directive*> => ast::ProgramFragment {
+        directives: <>,
+    }
+}
+
+pub Directive: ast::Directive = {
+    "inc" <path:String> "as" <alias:Identifier> => ast::Directive::Include {
+        path,
+        alias,
+    },
+    "prog" "{" <spec:SpecList> "}" => ast::Directive::UserProgram { spec },
+    "state" <name:Identifier> "(" <parameters:ParameterList> ")" "[" <values:ValueDefinitionList> "]" <body:Block> => ast::Directive::State {
+        name,
+        parameters,
+        values,
+        body,
+    },
+    "sub" <name:Identifier> "(" <parameters:ParameterList> ")" <body:Block> => ast::Directive::Subroutine {
+        name,
+        parameters,
+        body,
+    },
+}
+
+pub Block: ast::Block = {
+    "{" <(<Statement> ";")*> "}" => ast::Block { statements: <> }
+}
+
+pub Statement: ast::Statement = {
+    "let" <ValueDefinition> => ast::Statement::Definition(<>),
+    <Expression> => ast::Statement::Expression(<>),
+}
+
+pub ParameterList = CommaSeparated<ValueDeclaration>;
+
+pub ValueDeclaration: ast::ValueDeclaration = {
+    <identifier:Identifier> ":" <value_type:Identifier> => ast::ValueDeclaration {
+        identifier,
+        value_type,
+    }
+}
+
+pub ValueDefinitionList: Vec<ast::ValueDefinition> = {
+    <(<ValueDefinition> ";")*> => <>,
+}
+
+pub ValueDefinition: ast::ValueDefinition = {
+    <declaration:ValueDeclaration> "=" <expression:Expression> => ast::ValueDefinition {
+        declaration,
+        expression,
+    }
+}
+
+pub SpecList: Vec<ast::SpecEntry> = {
+    <SpecEntry*> => <>,
+}
+
+pub SpecEntry: ast::SpecEntry = {
+    <property:SpecKey> "=" <expression:Expression> ";" => ast::SpecEntry {
+        property,
+        expression
+    }
+}
+
+pub Expression: ast::Expression = {
+    <Number> => ast::Expression::NumberLiteral(<>),
+    <String> => ast::Expression::StringLiteral(<>),
+    <ValueIdentifier> => ast::Expression::VariableReference(<>),
+    <f:ValueIdentifier> "(" <args:ArgumentList> ")" => ast::Expression::FunctionCall {
+        function: f,
+        arguments: args,
+    },
+}
+
+pub ArgumentList = CommaSeparated<Argument>;
+
+pub Argument: ast::Argument = {
+    <i:Identifier> ":" <e:Expression> => ast::Argument {
+        name: i,
+        expression: e
+    }
+}
+
+Number: i16 = {
+    Digits =>? super::to_numeric(<>)
+        .map_err(|error| ParseError::User { error })
+};
+
+pub String: String = {
+    <s:StringLiteral> => super::to_string(&s[1..s.len()-1])
+}
+
+pub SpecKey: String = {
+    <s:SpecifierLiteral> => super::to_string(&s[1..])
+}
+
+pub ValueIdentifier: ast::ValueIdentifier = {
+    <Identifier> => ast::ValueIdentifier::Implicit(<>),
+    <ns:Identifier> "::" <id:Identifier> => ast::ValueIdentifier::Namespaced(ns, id),
+}
+
+pub Identifier: String = {
+    <IdentifierLiteral> => super::to_string(<>)
+}
+
+CommaSeparated<T>: Vec<T> = {
+    <mut v:(<T> ",")*> <e:T?> => match e {
+        None => v,
+        Some(e) => {
+            v.push(e);
+            v
+        }
+    }
+};
+
+match {
+    "+",
+    "-",
+    "*",
+    ";",
+    ",",
+    "&",
+    "(",
+    ")",
+    "{",
+    "}",
+    "[",
+    "]",
+    "=",
+    "\"",
+    "::",
+    
+    "as",
+    "let",
+    "goto",
+    "inc",
+    "prog",
+    "return",
+    "state",
+    "sub",
+
+    r"[0-9]+" => Digits,
+    r#""[^"]*""# => StringLiteral,
+} else {
+    ":",
+    r"\.(\w|[0-9])*" => SpecifierLiteral,
+    r"(\$|\w)(\w|[0-9])*" => IdentifierLiteral,
+} else {
+    // Ignore whitespace and comments
+    r"\s*" => { },
+    r"//[^\n\r]*[\n\r]*" => { },
+}

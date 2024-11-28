@@ -1,0 +1,9 @@
+prog {
+    .verb = 00;
+    .noun = 00;
+    .entry = main;
+}
+
+state main () [] {
+    $dsky::set_reg(register: 0, value: 42, sign: 1);
+}
