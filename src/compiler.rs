@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     agc::{Address, Instruction},
-    ast::{Block, Directive, Expression, Statement, ValueDeclaration},
+    ast::{Block, Directive, Expression, Statement, ValueDeclaration, ValueIdentifier},
     loader::{CompilationUnit, Program},
     types::{Numeric, Real},
 };
@@ -73,7 +73,7 @@ impl State {
                             .enqueue_label(label.clone())
                             .enqueue_comment(format!("STATE :: {} ({})", name, unit.path().display()));
 
-                        self.compile_block(body, &mut workspace);
+                        self.compile_function(body, &mut workspace)?;
 
                         workspace.write(&mut self.output, unit, name);
                     }
@@ -87,7 +87,7 @@ impl State {
                             .enqueue_label(label.clone())
                             .enqueue_comment(format!("SUBROUTINE :: {} ({})", name, unit.path().display()));
 
-                        self.compile_block(body, &mut workspace);
+                        self.compile_function(body, &mut workspace)?;
 
                         workspace.write(&mut self.output, unit, name);
                     }
@@ -105,7 +105,10 @@ impl State {
         Ok(self.output)
     }
 
-    fn compile_block(&mut self, block: &Block, workspace: &mut Workspace) {
+    fn compile_function(&mut self, block: &Block, workspace: &mut Workspace) -> anyhow::Result<()> {
+        // Store the Q register in the return slot so we can ret to it
+        self.copy_reg_q_to_slot(workspace.ret_slot());
+
         for statement in block.statements.iter() {
             match statement {
                 Statement::Definition(definition) => {
@@ -114,6 +117,8 @@ impl State {
                     if let Some(rhs) = rhs {
                         self.copy_slot_to_reg_a(rhs);
                         self.copy_reg_a_to_slot(lhs);
+                    } else {
+                        anyhow::bail!("RHS expression does not produce a value");
                     }
                 }
                 Statement::Expression(expression) => {
@@ -122,7 +127,11 @@ impl State {
             }
         }
 
+        // Put the return value back in the Q register and return
+        self.copy_slot_to_reg_q(workspace.ret_slot());
         self.output.code.append(Instruction::RETURN);
+
+        Ok(())
     }
 
     fn compile_expression(&mut self, expression: &Expression, workspace: &mut Workspace) -> Option<Slot> {
@@ -135,6 +144,10 @@ impl State {
                     location: Location::Fixed,
                 })
             }
+            Expression::VariableReference(identifier) => match identifier {
+                ValueIdentifier::Implicit(name) => workspace.resolve_named_slot(name),
+                ValueIdentifier::Namespaced(..) => unimplemented!("Support for namespaced identifiers"),
+            },
             _ => None,
         }
     }
@@ -152,6 +165,26 @@ impl State {
             panic!("Cannot write to a fixed location");
         } else {
             self.output.code.append(Instruction::XCH(slot.into()));
+        }
+    }
+
+    fn copy_slot_to_reg_q(&mut self, slot: Slot) {
+        if slot.location == Location::Fixed {
+            self.copy_slot_to_reg_a(slot);
+            self.output.code.append(Instruction::QXCH(Address::Relative {
+                label: Label::from_static("A"),
+                offset: 0,
+            }));
+        } else {
+            self.output.code.append(Instruction::QXCH(slot.into()));
+        }
+    }
+
+    fn copy_reg_q_to_slot(&mut self, slot: Slot) {
+        if slot.location == Location::Fixed {
+            panic!("Cannot write to a fixed location");
+        } else {
+            self.output.code.append(Instruction::QXCH(slot.into()));
         }
     }
 }
@@ -179,8 +212,17 @@ impl Workspace {
         workspace
     }
 
+    fn ret_slot(&self) -> Slot {
+        Slot {
+            label: self.label.clone(),
+            offset: 0,
+            location: Location::Erasable,
+        }
+    }
+
     fn slot_count(&self) -> usize {
-        self.parameters.len() + self.locals.len()
+        // Slot 0 is reserved for the return address
+        self.parameters.len() + self.locals.len() + 1
     }
 
     fn create_named_slot(&mut self, name: &str) -> Slot {
@@ -214,16 +256,14 @@ impl Workspace {
     }
 
     fn write(&self, output: &mut Output, unit: &CompilationUnit, block_name: &String) {
-        if self.slot_count() > 0 {
-            output
-                .data
-                .enqueue_line_break()
-                .enqueue_comment(format!("WORKSPACE :: {} ({})", block_name, unit.path().display()))
-                .enqueue_label(self.label.clone());
+        output
+            .data
+            .enqueue_line_break()
+            .enqueue_comment(format!("WORKSPACE :: {} ({})", block_name, unit.path().display()))
+            .enqueue_label(self.label.clone());
 
-            for _ in 0..self.slot_count() {
-                output.data.append(Instruction::ERASE);
-            }
+        for _ in 0..self.slot_count() {
+            output.data.append(Instruction::ERASE);
         }
     }
 }
