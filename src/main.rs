@@ -11,26 +11,20 @@ fn try_main() -> anyhow::Result<()> {
         return Ok(());
     };
 
-    println!();
-    println!("============== Parsing Result ==============");
-    println!();
-
     let file_path = PathBuf::from(file_path);
     let source_reader = FileSystemSourceReader::new_with_cwd()?;
     let source_loader = SourceLoader::new();
     let program = source_loader.parse_and_load(source_reader, &file_path)?;
 
     for unit in &program.compilation_units {
-        println!("{:#?}", unit.fragment());
+        println!("{:#?}\n", unit.fragment());
     }
 
-    println!();
-    println!("============ Compilation Result ============");
     println!();
 
     let compiler = Compiler::new();
     let output = compiler.compile(&program)?;
-    println!("{}", output.pretty());
+    println!("{}", output.to_yul_assembly());
 
     Ok(())
 }

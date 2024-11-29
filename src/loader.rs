@@ -12,23 +12,6 @@ pub struct CompilationUnit {
 }
 
 impl CompilationUnit {
-    pub fn singluar(fragment: ProgramFragment) -> Self {
-        assert_eq!(
-            fragment
-                .directives
-                .iter()
-                .filter(|d| matches!(d, Directive::Include { .. }))
-                .count(),
-            0,
-            "Single source fragment cannot contain include directives"
-        );
-
-        Self {
-            fragment: Rc::new(fragment),
-            namespace_lookup: HashMap::new(),
-        }
-    }
-
     pub fn fragment(&self) -> &ProgramFragment {
         &self.fragment
     }
@@ -42,9 +25,14 @@ impl SourceLoader {
     }
 
     pub fn parse_and_load<R: SourceReader>(&self, reader: R, entry_point: &PathBuf) -> anyhow::Result<Program> {
-        // TODO: Should be able to read and resolve include directives
         let source = reader.read(&entry_point)?;
         let fragment = crate::parser::parse(&source)?;
+
+        // TODO: Multiple file support!
+        if fragment.directives.iter().any(|d| matches!(d, Directive::Include { .. })) {
+            unimplemented!("Multiple file support is not implemented yet");
+        }
+
         let main_compilation_unit = CompilationUnit {
             fragment: Rc::new(fragment),
             namespace_lookup: HashMap::new(),
