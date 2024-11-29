@@ -2,13 +2,15 @@ use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
     fmt::{self, Formatter},
+    path::PathBuf,
+    rc::Rc,
 };
 
 use crate::{
     agc::{Address, Instruction},
     ast::{Block, Directive, Expression, Statement, ValueDeclaration, ValueIdentifier},
-    loader::{CompilationUnit, Program},
-    types::{Numeric, Real},
+    loader::Program,
+    types::Numeric,
 };
 
 pub struct Compiler {}
@@ -51,10 +53,7 @@ impl State {
         self.output.data.reserve_word(Label::from_static("DSKYVERB"));
         self.output.data.reserve_word(Label::from_static("DSKYMASK"));
 
-        // TODO: Delete this
-        _ = self
-            .constant_pool
-            .get_or_insert(&mut &mut self.label_generator, Numeric::Real(Real::from(-123.456)));
+        let mut environment = Environment::new();
 
         for unit in &program.compilation_units {
             for directive in &unit.fragment().directives {
@@ -65,34 +64,52 @@ impl State {
                         name, parameters, body, ..
                     } => {
                         let label: Label = self.label_generator.generate('S');
-                        let mut workspace = Workspace::create(self.label_generator.generate('W'), parameters, body);
-
-                        self.output
-                            .code
-                            .enqueue_line_break()
-                            .enqueue_label(label.clone())
-                            .enqueue_comment(format!("STATE :: {} ({})", name, unit.path().display()));
-
-                        self.compile_function(body, &mut workspace)?;
-
-                        workspace.write(&mut self.output, unit, name);
+                        let header = Header::create(self.label_generator.generate('W'), parameters);
+                        environment.insert_function(Function {
+                            name: name.clone(),
+                            path: unit.path().clone(),
+                            entry_point: label.clone(),
+                            body: body.clone(),
+                            kind: FunctionKind::State,
+                            header,
+                        });
                     }
                     Directive::Subroutine { name, parameters, body } => {
                         let label = self.label_generator.generate('F');
-                        let mut workspace = Workspace::create(self.label_generator.generate('W'), parameters, body);
-
-                        self.output
-                            .code
-                            .enqueue_line_break()
-                            .enqueue_label(label.clone())
-                            .enqueue_comment(format!("SUBROUTINE :: {} ({})", name, unit.path().display()));
-
-                        self.compile_function(body, &mut workspace)?;
-
-                        workspace.write(&mut self.output, unit, name);
+                        let header = Header::create(self.label_generator.generate('W'), parameters);
+                        environment.insert_function(Function {
+                            name: name.clone(),
+                            path: unit.path().clone(),
+                            entry_point: label.clone(),
+                            body: body.clone(),
+                            kind: FunctionKind::Subroutine,
+                            header,
+                        });
                     }
                 }
             }
+        }
+
+        for function in environment.iter_functions().collect::<Vec<_>>() {
+            let comment = format!(
+                "{} :: {} ({})",
+                match function.kind {
+                    FunctionKind::State => "STATE",
+                    FunctionKind::Subroutine => "SUBROUTINE",
+                },
+                function.name,
+                function.path.display()
+            );
+
+            self.output
+                .code
+                .enqueue_line_break()
+                .enqueue_label(function.entry_point.clone())
+                .enqueue_comment(comment);
+
+            let mut workspace = Workspace::create(function.clone());
+            self.compile_function(&environment, &function.body, &mut workspace)?;
+            workspace.write(&mut self.output);
         }
 
         if !self.constant_pool.constants.is_empty() {
@@ -105,15 +122,15 @@ impl State {
         Ok(self.output)
     }
 
-    fn compile_function(&mut self, block: &Block, workspace: &mut Workspace) -> anyhow::Result<()> {
+    fn compile_function(&mut self, environment: &Environment, block: &Block, workspace: &mut Workspace) -> anyhow::Result<()> {
         // Store the Q register in the return slot so we can ret to it
-        self.copy_reg_q_to_slot(workspace.ret_slot());
+        self.copy_reg_q_to_slot(workspace.function.header.ret_addr_slot());
 
         for statement in block.statements.iter() {
             match statement {
                 Statement::Definition(definition) => {
-                    let lhs = workspace.create_named_slot(&definition.declaration.identifier);
-                    let rhs = self.compile_expression(&definition.expression, workspace);
+                    let lhs = workspace.insert(definition.declaration.identifier.clone());
+                    let rhs = self.compile_expression(environment, &definition.expression, &workspace)?;
                     if let Some(rhs) = rhs {
                         self.copy_slot_to_reg_a(rhs);
                         self.copy_reg_a_to_slot(lhs);
@@ -122,33 +139,81 @@ impl State {
                     }
                 }
                 Statement::Expression(expression) => {
-                    self.compile_expression(expression, workspace);
+                    self.compile_expression(environment, expression, &workspace)?;
                 }
             }
         }
 
         // Put the return value back in the Q register and return
-        self.copy_slot_to_reg_q(workspace.ret_slot());
+        self.copy_slot_to_reg_q(workspace.function.header.ret_addr_slot());
         self.output.code.append(Instruction::RETURN);
 
         Ok(())
     }
 
-    fn compile_expression(&mut self, expression: &Expression, workspace: &mut Workspace) -> Option<Slot> {
+    fn compile_expression(
+        &mut self,
+        environment: &Environment,
+        expression: &Expression,
+        workspace: &Workspace,
+    ) -> anyhow::Result<Option<Slot>> {
         match expression {
             Expression::NumberLiteral(value) => {
                 let label = self.constant_pool.get_or_insert(&mut self.label_generator, value.clone());
-                Some(Slot {
+                Ok(Some(Slot {
                     label,
                     offset: 0,
                     location: Location::Fixed,
-                })
+                }))
             }
             Expression::VariableReference(identifier) => match identifier {
-                ValueIdentifier::Implicit(name) => workspace.resolve_named_slot(name),
+                ValueIdentifier::Implicit(name) => workspace
+                    .resolve(name)
+                    .ok_or_else(|| anyhow::anyhow!("Variable not found: {}", name))
+                    .map(|s| Some(s)),
                 ValueIdentifier::Namespaced(..) => unimplemented!("Support for namespaced identifiers"),
             },
-            _ => None,
+            Expression::FunctionCall { function, arguments } => {
+                let resolved_function = match function {
+                    ValueIdentifier::Implicit(name) => environment.resolve_function(name),
+                    ValueIdentifier::Namespaced(..) => unimplemented!("Support for namespaced identifiers"),
+                };
+
+                let Some(resolved_function) = resolved_function else {
+                    anyhow::bail!("Function not found: {}", function);
+                };
+
+                for (i, argument) in arguments.iter().enumerate() {
+                    let lhs = resolved_function
+                        .header
+                        .resolve_parameter_slot(&argument.name)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Parameter not found: {} in function {}",
+                                argument.name,
+                                resolved_function.name
+                            )
+                        })?;
+
+                    let rhs = self
+                        .compile_expression(environment, &argument.expression, workspace)?
+                        .ok_or_else(|| anyhow::anyhow!("Argument {} does not produce a value", i))?;
+
+                    self.output.code.enqueue_comment(format!("ARGUMENT '{}'", argument.name));
+                    self.copy_slot_to_reg_a(rhs);
+                    self.copy_reg_a_to_slot(lhs);
+                }
+
+                self.output
+                    .code
+                    .append(Instruction::TC(Address::Relative {
+                        label: resolved_function.entry_point.clone(),
+                        offset: 0,
+                    }))
+                    .with_comment(format!("CALL '{}'", resolved_function.name));
+
+                Ok(Some(resolved_function.header.ret_value_slot()))
+            }
         }
     }
 
@@ -189,65 +254,115 @@ impl State {
     }
 }
 
-struct Workspace {
-    label: Label,
-    parameters: HashMap<String, usize>,
-    locals: HashMap<String, usize>,
+struct Environment {
+    functions: HashMap<String, Rc<Function>>,
 }
 
-impl Workspace {
-    fn create(label: Label, parameters: &[ValueDeclaration], _body: &Block) -> Self {
-        let mut workspace = Self {
-            label,
-            parameters: HashMap::new(),
-            locals: HashMap::new(),
-        };
-
-        for parameter in parameters.iter() {
-            workspace
-                .parameters
-                .insert(parameter.identifier.clone(), workspace.slot_count());
+impl Environment {
+    fn new() -> Self {
+        Self {
+            functions: HashMap::new(),
         }
-
-        workspace
     }
 
-    fn ret_slot(&self) -> Slot {
+    fn insert_function(&mut self, function: Function) {
+        self.functions.insert(function.name.clone(), Rc::new(function));
+    }
+
+    fn resolve_function(&self, name: &str) -> Option<&Function> {
+        self.functions.get(name).map(|f| f.as_ref())
+    }
+
+    fn iter_functions<'a>(&'a self) -> impl Iterator<Item = Rc<Function>> + 'a {
+        self.functions.values().cloned()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Function {
+    name: String,
+    path: PathBuf,
+    kind: FunctionKind,
+    entry_point: Label,
+    header: Header,
+    body: Block,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+enum FunctionKind {
+    State,
+    Subroutine,
+}
+
+#[derive(Debug, Clone)]
+struct Header {
+    data_frame: Label,
+    parameters: Vec<String>,
+}
+
+impl Header {
+    fn create(data_frame: Label, parameters: &[ValueDeclaration]) -> Self {
+        Self {
+            data_frame,
+            parameters: parameters.iter().map(|p| p.identifier.clone()).collect(),
+        }
+    }
+
+    fn ret_addr_slot(&self) -> Slot {
         Slot {
-            label: self.label.clone(),
+            label: self.data_frame.clone(),
             offset: 0,
             location: Location::Erasable,
         }
     }
 
-    fn slot_count(&self) -> usize {
-        // Slot 0 is reserved for the return address
-        self.parameters.len() + self.locals.len() + 1
-    }
-
-    fn create_named_slot(&mut self, name: &str) -> Slot {
-        let slot = self.slot_count();
-        self.locals.insert(name.to_string(), slot);
+    fn ret_value_slot(&self) -> Slot {
         Slot {
-            label: self.label.clone(),
-            offset: slot as i32,
+            label: self.data_frame.clone(),
+            offset: 1,
             location: Location::Erasable,
         }
     }
 
-    fn resolve_named_slot(&self, name: &str) -> Option<Slot> {
-        if let Some(slot) = self.parameters.get(name) {
-            return Some(Slot {
-                label: self.label.clone(),
-                offset: *slot as i32,
-                location: Location::Erasable,
-            });
+    fn resolve_parameter_slot(&self, name: &str) -> Option<Slot> {
+        self.parameters.iter().position(|p| p == name).map(|i| Slot {
+            label: self.data_frame.clone(),
+            offset: i as i32 + 2,
+            location: Location::Erasable,
+        })
+    }
+}
+
+struct Workspace {
+    function: Rc<Function>,
+    locals: HashMap<String, i32>,
+}
+
+impl Workspace {
+    fn create(function: Rc<Function>) -> Self {
+        let mut locals = HashMap::new();
+        for (i, parameter) in function.header.parameters.iter().enumerate() {
+            locals.insert(parameter.clone(), i as i32);
         }
 
-        if let Some(slot) = self.locals.get(name) {
+        Self { function, locals }
+    }
+
+    fn insert(&mut self, name: String) -> Slot {
+        let offset = self.locals.len() as i32;
+        self.locals.insert(name, offset);
+        Slot {
+            label: self.function.header.data_frame.clone(),
+            offset,
+            location: Location::Erasable,
+        }
+    }
+
+    fn resolve(&self, name: &str) -> Option<Slot> {
+        if let Some(offset) = self.locals.get(name) {
             return Some(Slot {
-                label: self.label.clone(),
-                offset: *slot as i32,
+                label: self.function.header.data_frame.clone(),
+                offset: *offset + 2,
                 location: Location::Erasable,
             });
         }
@@ -255,14 +370,20 @@ impl Workspace {
         None
     }
 
-    fn write(&self, output: &mut Output, unit: &CompilationUnit, block_name: &String) {
+    fn write(&self, output: &mut Output) {
         output
             .data
             .enqueue_line_break()
-            .enqueue_comment(format!("WORKSPACE :: {} ({})", block_name, unit.path().display()))
-            .enqueue_label(self.label.clone());
+            .enqueue_comment(format!(
+                "WORKSPACE :: {} ({})",
+                self.function.name,
+                self.function.path.display()
+            ))
+            .enqueue_label(self.function.header.data_frame.clone());
 
-        for _ in 0..self.slot_count() {
+        // 2 extra slots for the return address and return value
+        let slot_count = self.function.header.parameters.len() + self.locals.len() + 2;
+        for _ in 0..slot_count {
             output.data.append(Instruction::ERASE);
         }
     }

@@ -57,7 +57,6 @@ pub enum Expression {
         arguments: Vec<Argument>,
     },
     NumberLiteral(Numeric),
-    StringLiteral(String),
     VariableReference(ValueIdentifier),
 }
 
@@ -77,4 +76,13 @@ pub struct SpecEntry {
 pub enum ValueIdentifier {
     Implicit(String),
     Namespaced(String, String),
+}
+
+impl std::fmt::Display for ValueIdentifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValueIdentifier::Implicit(name) => write!(f, "{}", name),
+            ValueIdentifier::Namespaced(namespace, name) => write!(f, "{}::{}", namespace, name),
+        }
+    }
 }
