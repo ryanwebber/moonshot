@@ -1,13 +1,13 @@
 use std::fmt::Display;
 
-use crate::types::Numeric;
+use crate::{compiler::Label, types::Numeric};
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum Instruction {
     AD,
     ADS,
-    CAE,
-    CAF,
+    CAE(Address),
+    CAF(Address),
     DEC(Numeric),
     ERASE,
     NOOP,
@@ -15,6 +15,7 @@ pub enum Instruction {
     TC,
     TCA,
     TS,
+    XCH(Address),
 }
 
 impl Display for Instruction {
@@ -23,8 +24,8 @@ impl Display for Instruction {
         match self {
             AD => write!(f, "AD"),
             ADS => write!(f, "ADS"),
-            CAE => write!(f, "CAE"),
-            CAF => write!(f, "CAF"),
+            CAE(address) => write!(f, "CAE\t{}", address),
+            CAF(address) => write!(f, "CAF\t{}", address),
             DEC(value) => write!(f, "DEC\t{}", value),
             ERASE => write!(f, "ERASE"),
             NOOP => write!(f, "NOOP"),
@@ -32,6 +33,25 @@ impl Display for Instruction {
             TC => write!(f, "TC"),
             TCA => write!(f, "TCA"),
             TS => write!(f, "TS"),
+            XCH(address) => write!(f, "XCH\t{}", address),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone, Eq, Hash)]
+pub enum Address {
+    Relative { label: Label, offset: i32 },
+}
+
+impl Display for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use Address::*;
+        match self {
+            Relative { label, offset } => match *offset {
+                0 => write!(f, "{}", label),
+                offset if offset < 0 => write!(f, "{} - {}", label, -offset),
+                offset => write!(f, "{} + {}", label, offset),
+            },
         }
     }
 }

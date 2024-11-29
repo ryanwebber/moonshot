@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::{
-    agc::Instruction,
-    ast::{Block, Directive, ValueDeclaration, ValueDefinition},
+    agc::{Address, Instruction},
+    ast::{Block, Directive, Expression, Statement, ValueDeclaration},
     loader::{CompilationUnit, Program},
     types::{Numeric, Real},
 };
@@ -19,24 +19,42 @@ impl Compiler {
     }
 
     pub fn compile(&self, program: &Program) -> anyhow::Result<Output> {
-        let mut output = Output::new();
-        let mut label_generator = LabelGenerator::new();
-        let mut constant_pool = ConstantPool::new();
+        State::new().compile(program)
+    }
+}
 
-        output.data.enqueue_comment("DSKY REGISTERS AND FLAGS");
-        output.data.reserve_word(Label::new("DSKYREG1"));
-        output.data.reserve_word(Label::new("DSKYSGN1"));
-        output.data.reserve_word(Label::new("DSKYREG2"));
-        output.data.reserve_word(Label::new("DSKYSGN2"));
-        output.data.reserve_word(Label::new("DSKYREG3"));
-        output.data.reserve_word(Label::new("DSKYSGN3"));
-        output.data.reserve_word(Label::new("DSKYPROG"));
-        output.data.reserve_word(Label::new("DSKYNOUN"));
-        output.data.reserve_word(Label::new("DSKYVERB"));
-        output.data.reserve_word(Label::new("DSKYMASK"));
+struct State {
+    output: Output,
+    label_generator: LabelGenerator,
+    constant_pool: ConstantPool,
+}
+
+impl State {
+    fn new() -> Self {
+        Self {
+            output: Output::new(),
+            label_generator: LabelGenerator::new(),
+            constant_pool: ConstantPool::new(),
+        }
+    }
+
+    pub fn compile(mut self, program: &Program) -> anyhow::Result<Output> {
+        self.output.data.enqueue_comment("DSKY REGISTERS AND FLAGS");
+        self.output.data.reserve_word(Label::from_static("DSKYREG1"));
+        self.output.data.reserve_word(Label::from_static("DSKYSGN1"));
+        self.output.data.reserve_word(Label::from_static("DSKYREG2"));
+        self.output.data.reserve_word(Label::from_static("DSKYSGN2"));
+        self.output.data.reserve_word(Label::from_static("DSKYREG3"));
+        self.output.data.reserve_word(Label::from_static("DSKYSGN3"));
+        self.output.data.reserve_word(Label::from_static("DSKYPROG"));
+        self.output.data.reserve_word(Label::from_static("DSKYNOUN"));
+        self.output.data.reserve_word(Label::from_static("DSKYVERB"));
+        self.output.data.reserve_word(Label::from_static("DSKYMASK"));
 
         // TODO: Delete this
-        _ = constant_pool.get_or_insert(Numeric::Real(Real::from(-123.456)));
+        _ = self
+            .constant_pool
+            .get_or_insert(&mut &mut self.label_generator, Numeric::Real(Real::from(-123.456)));
 
         for unit in &program.compilation_units {
             for directive in &unit.fragment().directives {
@@ -44,63 +62,112 @@ impl Compiler {
                     Directive::Include { .. } => {}
                     Directive::UserProgram { .. } => {}
                     Directive::State {
-                        name,
-                        values,
-                        parameters,
-                        body,
+                        name, parameters, body, ..
                     } => {
-                        let label: Label = label_generator.generate('S');
-                        output
-                            .code
-                            .append(Instruction::NOOP)
-                            .with_comment(format!("STATE :: {} ({})", name, unit.path().display()))
-                            .with_label(label)
-                            .with_preceding_line_break();
+                        let label: Label = self.label_generator.generate('S');
+                        let mut workspace = Workspace::create(self.label_generator.generate('W'), parameters, body);
 
-                        let workspace = Workspace::create(label_generator.generate('W'), parameters, values, body);
-                        workspace.write(&mut output, unit, name);
+                        self.output
+                            .code
+                            .enqueue_line_break()
+                            .enqueue_label(label.clone())
+                            .enqueue_comment(format!("STATE :: {} ({})", name, unit.path().display()));
+
+                        self.compile_block(body, &mut workspace);
+
+                        workspace.write(&mut self.output, unit, name);
                     }
                     Directive::Subroutine { name, parameters, body } => {
-                        let label = label_generator.generate('F');
-                        output
-                            .code
-                            .append(Instruction::NOOP)
-                            .with_comment(format!("SUBROUTINE :: {} ({})", name, unit.path().display()))
-                            .with_label(label)
-                            .with_preceding_line_break();
+                        let label = self.label_generator.generate('F');
+                        let mut workspace = Workspace::create(self.label_generator.generate('W'), parameters, body);
 
-                        let workspace = Workspace::create(label_generator.generate('W'), parameters, &[], body);
-                        workspace.write(&mut output, unit, name);
+                        self.output
+                            .code
+                            .enqueue_line_break()
+                            .enqueue_label(label.clone())
+                            .enqueue_comment(format!("SUBROUTINE :: {} ({})", name, unit.path().display()));
+
+                        self.compile_block(body, &mut workspace);
+
+                        workspace.write(&mut self.output, unit, name);
                     }
                 }
             }
         }
 
-        if !constant_pool.constants.is_empty() {
-            output.code.enqueue_line_break().enqueue_comment("CONSTANT POOL");
-            for (constant, label) in constant_pool.constants.into_iter() {
-                output.code.append(Instruction::DEC(constant)).with_label(label);
+        if !self.constant_pool.constants.is_empty() {
+            self.output.code.enqueue_line_break().enqueue_comment("CONSTANT POOL");
+            for (constant, label) in self.constant_pool.constants.into_iter() {
+                self.output.code.append(Instruction::DEC(constant)).with_label(label);
             }
         }
 
-        Ok(output)
+        Ok(self.output)
+    }
+
+    fn compile_block(&mut self, block: &Block, workspace: &mut Workspace) {
+        for statement in block.statements.iter() {
+            match statement {
+                Statement::Definition(definition) => {
+                    let lhs = workspace.create_named_slot(&definition.declaration.identifier);
+                    let rhs = self.compile_expression(&definition.expression, workspace);
+                    if let Some(rhs) = rhs {
+                        self.copy_slot_to_reg_a(rhs);
+                        self.copy_reg_a_to_slot(lhs);
+                    }
+                }
+                Statement::Expression(expression) => {
+                    self.compile_expression(expression, workspace);
+                }
+            }
+        }
+
+        self.output.code.append(Instruction::RETURN);
+    }
+
+    fn compile_expression(&mut self, expression: &Expression, workspace: &mut Workspace) -> Option<Slot> {
+        match expression {
+            Expression::NumberLiteral(value) => {
+                let label = self.constant_pool.get_or_insert(&mut self.label_generator, value.clone());
+                Some(Slot {
+                    label,
+                    offset: 0,
+                    location: Location::Fixed,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn copy_slot_to_reg_a(&mut self, slot: Slot) {
+        if slot.location == Location::Fixed {
+            self.output.code.append(Instruction::CAF(slot.into()));
+        } else {
+            self.output.code.append(Instruction::CAE(slot.into()));
+        }
+    }
+
+    fn copy_reg_a_to_slot(&mut self, slot: Slot) {
+        if slot.location == Location::Fixed {
+            panic!("Cannot write to a fixed location");
+        } else {
+            self.output.code.append(Instruction::XCH(slot.into()));
+        }
     }
 }
 
 struct Workspace {
     label: Label,
-    values: HashMap<String, usize>,
     parameters: HashMap<String, usize>,
-    temporaries: HashMap<String, usize>,
+    locals: HashMap<String, usize>,
 }
 
 impl Workspace {
-    fn create(label: Label, parameters: &[ValueDeclaration], values: &[ValueDefinition], _body: &Block) -> Self {
+    fn create(label: Label, parameters: &[ValueDeclaration], _body: &Block) -> Self {
         let mut workspace = Self {
             label,
-            values: HashMap::new(),
             parameters: HashMap::new(),
-            temporaries: HashMap::new(),
+            locals: HashMap::new(),
         };
 
         for parameter in parameters.iter() {
@@ -109,17 +176,41 @@ impl Workspace {
                 .insert(parameter.identifier.clone(), workspace.slot_count());
         }
 
-        for value in values.iter() {
-            workspace
-                .values
-                .insert(value.declaration.identifier.clone(), workspace.slot_count());
-        }
-
         workspace
     }
 
     fn slot_count(&self) -> usize {
-        self.values.len() + self.parameters.len() + self.temporaries.len()
+        self.parameters.len() + self.locals.len()
+    }
+
+    fn create_named_slot(&mut self, name: &str) -> Slot {
+        let slot = self.slot_count();
+        self.locals.insert(name.to_string(), slot);
+        Slot {
+            label: self.label.clone(),
+            offset: slot as i32,
+            location: Location::Erasable,
+        }
+    }
+
+    fn resolve_named_slot(&self, name: &str) -> Option<Slot> {
+        if let Some(slot) = self.parameters.get(name) {
+            return Some(Slot {
+                label: self.label.clone(),
+                offset: *slot as i32,
+                location: Location::Erasable,
+            });
+        }
+
+        if let Some(slot) = self.locals.get(name) {
+            return Some(Slot {
+                label: self.label.clone(),
+                offset: *slot as i32,
+                location: Location::Erasable,
+            });
+        }
+
+        None
     }
 
     fn write(&self, output: &mut Output, unit: &CompilationUnit, block_name: &String) {
@@ -135,6 +226,28 @@ impl Workspace {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Slot {
+    pub label: Label,
+    pub offset: i32,
+    pub location: Location,
+}
+
+impl Into<Address> for Slot {
+    fn into(self) -> Address {
+        Address::Relative {
+            label: self.label,
+            offset: self.offset,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Location {
+    Erasable,
+    Fixed,
 }
 
 #[derive(Debug, Clone)]
@@ -253,8 +366,9 @@ impl std::fmt::Display for ArchiveWriter<'_> {
 
             if let Some(label) = label {
                 write!(f, "{:.8}\t", label)?;
-                if label.as_str().len() <= 4 {
-                    write!(f, "\t")?;
+                match label {
+                    Label::Static(s) if s.len() <= 4 => write!(f, "\t")?,
+                    _ => {}
                 }
 
                 writeln!(f, "{}", instruction)?;
@@ -268,43 +382,44 @@ impl std::fmt::Display for ArchiveWriter<'_> {
 }
 
 struct LabelGenerator {
-    prefixes: HashMap<char, usize>,
+    next_identifier: usize,
 }
 
 impl LabelGenerator {
     pub fn new() -> Self {
-        Self {
-            prefixes: HashMap::new(),
-        }
+        Self { next_identifier: 0 }
     }
 
     pub fn generate(&mut self, prefix: char) -> Label {
         let prefix = prefix.to_ascii_uppercase();
-        let entry = self.prefixes.entry(prefix);
-        let index = entry.or_insert(0);
-        let label = Label::new(format!("{}{:0>7}", prefix, index));
+        let label = Label::Generated {
+            prefix,
+            identifier: self.next_identifier,
+        };
 
-        *index += 1;
+        self.next_identifier += 1;
         label
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Label(Cow<'static, str>);
+pub enum Label {
+    Static(Cow<'static, str>),
+    Generated { prefix: char, identifier: usize },
+}
 
 impl Label {
-    pub fn new(s: impl Into<Cow<'static, str>>) -> Self {
-        Self(s.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
+    pub fn from_static(s: impl Into<Cow<'static, str>>) -> Self {
+        Label::Static(s.into())
     }
 }
 
 impl fmt::Display for Label {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
+        match self {
+            Label::Static(identifier) => write!(f, "{:.8}", identifier),
+            Label::Generated { prefix, identifier } => write!(f, "{}{:0>7X}", prefix, identifier),
+        }
     }
 }
 
@@ -319,12 +434,12 @@ impl ConstantPool {
         }
     }
 
-    pub fn get_or_insert(&mut self, value: Numeric) -> Label {
+    pub fn get_or_insert(&mut self, label_generator: &mut LabelGenerator, value: Numeric) -> Label {
         if let Some(label) = self.constants.get(&value) {
             return label.clone();
         }
 
-        let label = Label::new(format!("C{:0>7}", self.constants.len()));
+        let label = label_generator.generate('C');
         self.constants.insert(value, label.clone());
         label
     }
@@ -338,15 +453,30 @@ mod test {
 
     #[test]
     fn test_static_label() {
-        let label = Label::new("TEST");
-        assert!(matches!(label.0, Cow::Borrowed(..)));
+        let label = Label::from_static("TEST");
+        assert!(matches!(label, Label::Static(Cow::Borrowed(..))));
+        assert_eq!(label.to_string(), String::from("TEST"));
     }
 
     #[test]
     fn test_label_generator() {
         let mut generator = super::LabelGenerator::new();
-        assert_eq!(generator.generate('t'), Label::new("T0000000"));
-        assert_eq!(generator.generate('T'), Label::new("T0000001"));
-        assert_eq!(generator.generate('B'), Label::new("B0000000"));
+        assert_eq!(
+            generator.generate('T'),
+            Label::Generated {
+                prefix: 'T',
+                identifier: 0
+            }
+        );
+
+        assert_eq!(
+            generator.generate('t'),
+            Label::Generated {
+                prefix: 'T',
+                identifier: 1
+            }
+        );
+
+        assert_eq!(generator.generate('t').to_string(), String::from("T0000002"));
     }
 }

@@ -7,10 +7,11 @@ prog {
 state main () [] {
     $dsky::set_reg(
         register: 0,
-        value: add(a: 1, b: 2),
+        value: add(a: 40, b: 2),
         sign: 1
     );
 }
 
 sub add(a: i15, b: i15) {
+    let x: i15 = 234;
 }

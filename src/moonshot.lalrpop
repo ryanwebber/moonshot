@@ -80,7 +80,6 @@ pub SpecEntry: ast::SpecEntry = {
 
 pub Expression: ast::Expression = {
     <Number> => ast::Expression::NumberLiteral(<>),
-    <String> => ast::Expression::StringLiteral(<>),
     <ValueIdentifier> => ast::Expression::VariableReference(<>),
     <f:ValueIdentifier> "(" <args:ArgumentList> ")" => ast::Expression::FunctionCall {
         function: f,

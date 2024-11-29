@@ -1,6 +1,6 @@
 # Moonshot Language + Toolchain
 
-A compiler toolchain targeting the Apollo Guidance Computer. This is a hobby
+A language and compiler toolchain targeting the Apollo Guidance Computer. This is a hobby
 project started to learn more about the AGC architecture and software.
 
 ## Example
