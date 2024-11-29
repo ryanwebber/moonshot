@@ -3,6 +3,7 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 
 use crate::ast;
+use crate::types::{self, Numeric};
 use lalrpop_util::lalrpop_mod;
 
 lalrpop_mod!(pub moonshot);
@@ -49,8 +50,9 @@ fn to_string(s: &str) -> String {
     s.to_string()
 }
 
-fn to_numeric(s: &str) -> Result<i16, SemanticError> {
-    s.parse().map_err(|_| SemanticError::InvalidNumberLiteral)
+fn to_numeric(s: &str) -> Result<Numeric, SemanticError> {
+    let float_value: f32 = s.parse().map_err(|_| SemanticError::InvalidNumberLiteral)?;
+    Ok(Numeric::Real(float_value.into()))
 }
 
 #[cfg(test)]

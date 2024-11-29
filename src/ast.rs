@@ -1,3 +1,5 @@
+use crate::types::Numeric;
+
 #[derive(Debug, Clone)]
 pub struct ProgramFragment {
     pub directives: Vec<Directive>,
@@ -54,7 +56,7 @@ pub enum Expression {
         function: ValueIdentifier,
         arguments: Vec<Argument>,
     },
-    NumberLiteral(i16),
+    NumberLiteral(Numeric),
     StringLiteral(String),
     VariableReference(ValueIdentifier),
 }

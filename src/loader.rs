@@ -7,11 +7,16 @@ pub struct Program {
 }
 
 pub struct CompilationUnit {
+    path: PathBuf,
     fragment: Rc<ProgramFragment>,
-    namespace_lookup: HashMap<String, Rc<ProgramFragment>>,
+    _namespace_lookup: HashMap<String, Rc<ProgramFragment>>,
 }
 
 impl CompilationUnit {
+    pub fn path(&self) -> &PathBuf {
+        &self.path
+    }
+
     pub fn fragment(&self) -> &ProgramFragment {
         &self.fragment
     }
@@ -34,8 +39,9 @@ impl SourceLoader {
         }
 
         let main_compilation_unit = CompilationUnit {
+            path: entry_point.clone(),
             fragment: Rc::new(fragment),
-            namespace_lookup: HashMap::new(),
+            _namespace_lookup: HashMap::new(),
         };
 
         Ok(Program {

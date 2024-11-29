@@ -2,6 +2,7 @@ use lalrpop_util::ParseError;
 
 use super::SemanticError;
 use super::ast;
+use super::types;
 
 grammar;
 
@@ -21,7 +22,9 @@ pub Directive: ast::Directive = {
         path,
         alias,
     },
-    "prog" "{" <spec:SpecList> "}" => ast::Directive::UserProgram { spec },
+    "prog" "{" <SpecList> "}" => ast::Directive::UserProgram {
+        spec: <>
+    },
     "state" <name:Identifier> "(" <parameters:ParameterList> ")" "[" <values:ValueDefinitionList> "]" <body:Block> => ast::Directive::State {
         name,
         parameters,
@@ -94,7 +97,7 @@ pub Argument: ast::Argument = {
     }
 }
 
-Number: i16 = {
+Number: types::Numeric = {
     Digits =>? super::to_numeric(<>)
         .map_err(|error| ParseError::User { error })
 };
@@ -109,7 +112,7 @@ pub SpecKey: String = {
 
 pub ValueIdentifier: ast::ValueIdentifier = {
     <Identifier> => ast::ValueIdentifier::Implicit(<>),
-    <ns:Identifier> "::" <id:Identifier> => ast::ValueIdentifier::Namespaced(ns, id),
+    <Identifier> "::" <Identifier> => ast::ValueIdentifier::Namespaced(<>),
 }
 
 pub Identifier: String = {

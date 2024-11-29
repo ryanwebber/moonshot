@@ -1,12 +1,14 @@
 use std::fmt::Display;
 
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+use crate::types::Numeric;
+
+#[derive(Debug, PartialEq, Clone)]
 pub enum Instruction {
     AD,
     ADS,
     CAE,
     CAF,
-    DEC(i16),
+    DEC(Numeric),
     ERASE,
     NOOP,
     RETURN,
