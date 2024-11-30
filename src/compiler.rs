@@ -112,6 +112,16 @@ impl State {
             workspace.write(&mut self.output);
         }
 
+        // Emit an exit instruction just to avoid falling through into constants
+        self.output
+            .code
+            .append(Instruction::TC(Address::Relative {
+                label: Label::from_static("EXIT"),
+                offset: 0,
+            }))
+            .with_comment("END OF FUNCTIONS")
+            .with_preceding_line_break();
+
         if !self.constant_pool.constants.is_empty() {
             self.output.code.enqueue_line_break().enqueue_comment("CONSTANT POOL");
             for (constant, label) in self.constant_pool.constants.into_iter() {
@@ -301,6 +311,8 @@ struct Header {
 }
 
 impl Header {
+    const DATA_FRAME_VARIABLE_OFFSET: usize = 2;
+
     fn create(data_frame: Label, parameters: &[ValueDeclaration]) -> Self {
         Self {
             data_frame,
@@ -327,44 +339,69 @@ impl Header {
     fn resolve_parameter_slot(&self, name: &str) -> Option<Slot> {
         self.parameters.iter().position(|p| p == name).map(|i| Slot {
             label: self.data_frame.clone(),
-            offset: i as i32 + 2,
+            offset: (i + Self::DATA_FRAME_VARIABLE_OFFSET) as i32,
             location: Location::Erasable,
         })
+    }
+
+    fn reserved_slot_count(&self) -> usize {
+        self.parameters.len() + Self::DATA_FRAME_VARIABLE_OFFSET
+    }
+
+    fn write_slots(&self, output: &mut Output) {
+        // Return address slot
+        output.data.append(Instruction::ERASE);
+
+        // Return value slot
+        output.data.append(Instruction::ERASE);
+
+        // Parameter slots
+        for (i, parameter) in self.parameters.iter().enumerate() {
+            output.data.append(Instruction::ERASE).with_comment(format!(
+                "PARAMETER '{}' (+{})",
+                parameter,
+                i + Self::DATA_FRAME_VARIABLE_OFFSET
+            ));
+        }
     }
 }
 
 struct Workspace {
     function: Rc<Function>,
-    locals: HashMap<String, i32>,
+    locals: Vec<(String, i32)>,
 }
 
 impl Workspace {
     fn create(function: Rc<Function>) -> Self {
-        let mut locals = HashMap::new();
-        for (i, parameter) in function.header.parameters.iter().enumerate() {
-            locals.insert(parameter.clone(), i as i32);
+        Self {
+            function,
+            locals: Vec::new(),
         }
-
-        Self { function, locals }
     }
 
     fn insert(&mut self, name: String) -> Slot {
-        let offset = self.locals.len() as i32;
-        self.locals.insert(name, offset);
+        let offset = (self.locals.len() + self.function.header.reserved_slot_count()) as i32;
+        self.locals.push((name, offset));
         Slot {
             label: self.function.header.data_frame.clone(),
-            offset,
+            offset: offset,
             location: Location::Erasable,
         }
     }
 
     fn resolve(&self, name: &str) -> Option<Slot> {
-        if let Some(offset) = self.locals.get(name) {
-            return Some(Slot {
-                label: self.function.header.data_frame.clone(),
-                offset: *offset + 2,
-                location: Location::Erasable,
-            });
+        for (local, offset) in self.locals.iter() {
+            if local == name {
+                return Some(Slot {
+                    label: self.function.header.data_frame.clone(),
+                    offset: *offset,
+                    location: Location::Erasable,
+                });
+            }
+        }
+
+        if let Some(offset) = self.function.header.resolve_parameter_slot(name) {
+            return Some(offset);
         }
 
         None
@@ -381,10 +418,15 @@ impl Workspace {
             ))
             .enqueue_label(self.function.header.data_frame.clone());
 
-        // 2 extra slots for the return address and return value
-        let slot_count = self.function.header.parameters.len() + self.locals.len() + 2;
-        for _ in 0..slot_count {
-            output.data.append(Instruction::ERASE);
+        // Header slots
+        self.function.header.write_slots(output);
+
+        // Local slots
+        for (name, offset) in self.locals.iter() {
+            output
+                .data
+                .append(Instruction::ERASE)
+                .with_comment(format!("LOCAL '{}' (+{})", name, offset,));
         }
     }
 }
