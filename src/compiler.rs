@@ -1,8 +1,10 @@
 use std::{collections::HashMap, path::PathBuf, rc::Rc};
 
+use anyhow::Ok;
+
 use crate::{
     agc::{Address, Instruction},
-    ast::{Block, Directive, Expression, Statement, ValueDeclaration, ValueIdentifier},
+    ast::{BinaryOperator, Block, Directive, Expression, Statement, ValueDeclaration, ValueIdentifier},
     generator::{Archive, Generator, Label, Location, Output, Slot},
     loader::Program,
     types::Numeric,
@@ -144,7 +146,7 @@ impl State {
                     ));
 
                     let lhs = workspace.insert(definition.declaration.identifier.clone());
-                    let rhs = self.compile_expression(environment, &definition.expression, &workspace)?;
+                    let rhs = self.compile_expression(environment, &definition.expression, workspace)?;
                     if let Some(rhs) = rhs {
                         self.generator.copy_slot_to_reg_a(rhs);
                         self.generator.copy_reg_a_to_slot(lhs);
@@ -153,7 +155,26 @@ impl State {
                     }
                 }
                 Statement::Expression(expression) => {
-                    self.compile_expression(environment, expression, &workspace)?;
+                    self.compile_expression(environment, expression, workspace)?;
+                }
+                Statement::Return(expression) => {
+                    if let Some(expression) = expression {
+                        self.generator
+                            .code_mut()
+                            .enqueue_comment(format!("RETURN {}", expression.brief()));
+                        let ret_value = self.compile_expression(environment, expression, workspace)?;
+                        if let Some(ret_value) = ret_value {
+                            self.generator.copy_slot_to_reg_a(ret_value);
+                            self.generator.copy_reg_a_to_slot(workspace.function.header.ret_value_slot());
+                        } else {
+                            anyhow::bail!("Return expression does not produce a value: {}", expression.brief());
+                        }
+                    }
+
+                    // Put the return value back in the Q register and return
+                    self.generator.code_mut().enqueue_comment("EARLY RETURN");
+                    self.generator.copy_slot_to_reg_q(workspace.function.header.ret_addr_slot());
+                    self.generator.code_mut().append(Instruction::RETURN);
                 }
             }
         }
@@ -169,24 +190,31 @@ impl State {
         &mut self,
         environment: &Environment,
         expression: &Expression,
-        workspace: &Workspace,
+        workspace: &mut Workspace,
     ) -> anyhow::Result<Option<Slot>> {
         match expression {
-            Expression::NumberLiteral(value) => {
-                let label = self.constant_pool.get_or_insert(&mut self.label_generator, value.clone());
-                Ok(Some(Slot {
-                    label,
-                    offset: 0,
-                    location: Location::Fixed,
-                }))
+            Expression::BinaryOperation { op, lhs, rhs } => {
+                let lhs_slot = self.compile_expression(environment, lhs, workspace)?;
+                let rhs_slot = self.compile_expression(environment, rhs, workspace)?;
+                let lhs_slot = lhs_slot.ok_or_else(|| anyhow::anyhow!("LHS does not produce a value: {}", lhs.brief()))?;
+                let rhs_slot = rhs_slot.ok_or_else(|| anyhow::anyhow!("RHS does not produce a value: {}", rhs.brief()))?;
+                let temporary = workspace.allocate_temporary();
+                match op {
+                    BinaryOperator::Addition => {
+                        // Copy RHS to TEMP, since this is most likely to be a no-op during optimization
+                        self.generator.copy_slot_to_reg_a(rhs_slot);
+                        self.generator.copy_reg_a_to_slot(temporary.clone());
+
+                        // Copy LHS to A
+                        self.generator.copy_slot_to_reg_a(lhs_slot);
+
+                        // Add A and RHS together
+                        self.generator.code_mut().append(Instruction::ADS(temporary.clone().into()));
+                    }
+                }
+
+                Ok(Some(temporary))
             }
-            Expression::VariableReference(identifier) => match identifier {
-                ValueIdentifier::Implicit(name) => workspace
-                    .resolve(name)
-                    .ok_or_else(|| anyhow::anyhow!("Variable not found: {}", name))
-                    .map(|s| Some(s)),
-                ValueIdentifier::Namespaced(..) => unimplemented!("Support for namespaced identifiers"),
-            },
             Expression::FunctionCall { function, arguments } => {
                 let resolved_function = match function {
                     ValueIdentifier::Implicit(name) => environment.resolve_function(name),
@@ -230,6 +258,21 @@ impl State {
 
                 Ok(Some(resolved_function.header.ret_value_slot()))
             }
+            Expression::NumberLiteral(value) => {
+                let label = self.constant_pool.get_or_insert(&mut self.label_generator, value.clone());
+                Ok(Some(Slot {
+                    label,
+                    offset: 0,
+                    location: Location::Fixed,
+                }))
+            }
+            Expression::VariableReference(identifier) => match identifier {
+                ValueIdentifier::Implicit(name) => workspace
+                    .resolve(name)
+                    .ok_or_else(|| anyhow::anyhow!("Variable not found: {}", name))
+                    .map(|s| Some(s)),
+                ValueIdentifier::Namespaced(..) => unimplemented!("Support for namespaced identifiers"),
+            },
         }
     }
 }
@@ -338,7 +381,7 @@ impl Header {
 
 struct Workspace {
     function: Rc<Function>,
-    locals: Vec<(String, i32)>,
+    locals: Vec<(Option<String>, i32)>,
 }
 
 impl Workspace {
@@ -351,17 +394,27 @@ impl Workspace {
 
     fn insert(&mut self, name: String) -> Slot {
         let offset = (self.locals.len() + self.function.header.reserved_slot_count()) as i32;
-        self.locals.push((name, offset));
+        self.locals.push((Some(name), offset));
         Slot {
+            offset,
             label: self.function.header.data_frame.clone(),
-            offset: offset,
+            location: Location::Erasable,
+        }
+    }
+
+    fn allocate_temporary(&mut self) -> Slot {
+        let offset = (self.locals.len() + self.function.header.reserved_slot_count()) as i32;
+        self.locals.push((None, offset));
+        Slot {
+            offset,
+            label: self.function.header.data_frame.clone(),
             location: Location::Erasable,
         }
     }
 
     fn resolve(&self, name: &str) -> Option<Slot> {
         for (local, offset) in self.locals.iter() {
-            if local == name {
+            if matches!(local, Some(local) if local == name) {
                 return Some(Slot {
                     label: self.function.header.data_frame.clone(),
                     offset: *offset,
@@ -391,8 +444,11 @@ impl Workspace {
 
         // Local slots
         for (name, offset) in self.locals.iter() {
-            data.append(Instruction::ERASE)
-                .with_comment(format!("LOCAL '{}' (+{})", name, offset));
+            data.append(Instruction::ERASE).with_comment(if let Some(name) = name {
+                format!("LOCAL '{}' (+{})", name, offset)
+            } else {
+                format!("TEMPORARY (+{})", offset)
+            });
         }
     }
 }

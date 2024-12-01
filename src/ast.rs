@@ -36,6 +36,7 @@ pub struct Block {
 pub enum Statement {
     Definition(ValueDefinition),
     Expression(Expression),
+    Return(Option<Expression>),
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +53,11 @@ pub struct ValueDefinition {
 
 #[derive(Debug, Clone)]
 pub enum Expression {
+    BinaryOperation {
+        op: BinaryOperator,
+        lhs: Box<Expression>,
+        rhs: Box<Expression>,
+    },
     FunctionCall {
         function: ValueIdentifier,
         arguments: Vec<Argument>,
@@ -73,6 +79,9 @@ pub struct ExpressionBrief<'a> {
 impl std::fmt::Display for ExpressionBrief<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.expression {
+            Expression::BinaryOperation { op, lhs, rhs } => {
+                write!(f, "({} {} {})", op, lhs.brief(), rhs.brief())
+            }
             Expression::FunctionCall { function, arguments } => {
                 write!(f, "{}(", function)?;
                 for arg in arguments.iter() {
@@ -82,6 +91,19 @@ impl std::fmt::Display for ExpressionBrief<'_> {
             }
             Expression::NumberLiteral(n) => write!(f, "{}", n),
             Expression::VariableReference(v) => write!(f, "{}", v),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum BinaryOperator {
+    Addition,
+}
+
+impl std::fmt::Display for BinaryOperator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BinaryOperator::Addition => write!(f, "+"),
         }
     }
 }

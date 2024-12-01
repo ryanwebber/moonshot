@@ -44,6 +44,7 @@ pub Block: ast::Block = {
 
 pub Statement: ast::Statement = {
     "let" <ValueDefinition> => ast::Statement::Definition(<>),
+    "return" <Expression?> => ast::Statement::Return(<>),
     <Expression> => ast::Statement::Expression(<>),
 }
 
@@ -79,12 +80,19 @@ pub SpecEntry: ast::SpecEntry = {
 }
 
 pub Expression: ast::Expression = {
+    #[precedence(level="0")]
     <Number> => ast::Expression::NumberLiteral(<>),
     <ValueIdentifier> => ast::Expression::VariableReference(<>),
     <f:ValueIdentifier> "(" <args:ArgumentList> ")" => ast::Expression::FunctionCall {
         function: f,
         arguments: args,
     },
+    #[precedence(level="1")] #[assoc(side="left")]
+    <lhs:Expression> "+" <rhs:Expression> => ast::Expression::BinaryOperation {
+        lhs: Box::new(lhs),
+        rhs: Box::new(rhs),
+        op: ast::BinaryOperator::Addition,
+    }
 }
 
 pub ArgumentList = CommaSeparated<Argument>;

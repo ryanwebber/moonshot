@@ -4,8 +4,7 @@ use crate::{generator::Label, types::Numeric};
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum Instruction {
-    AD,
-    ADS,
+    ADS(Address),
     CAE(Address),
     CAF(Address),
     DEC(Numeric),
@@ -14,8 +13,6 @@ pub enum Instruction {
     QXCH(Address),
     RETURN,
     TC(Address),
-    TCA,
-    TS,
     XCH(Address),
 }
 
@@ -23,8 +20,7 @@ impl Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use Instruction::*;
         match self {
-            AD => write!(f, "AD"),
-            ADS => write!(f, "ADS"),
+            ADS(address) => write!(f, "ADS\t{}", address),
             CAE(address) => write!(f, "CAE\t{}", address),
             CAF(address) => write!(f, "CAF\t{}", address),
             DEC(value) => write!(f, "DEC\t{}", value),
@@ -33,8 +29,6 @@ impl Display for Instruction {
             QXCH(address) => write!(f, "QXCH\t{}", address),
             RETURN => write!(f, "RETURN"),
             TC(address) => write!(f, "TC\t{}", address),
-            TCA => write!(f, "TCA"),
-            TS => write!(f, "TS"),
             XCH(address) => write!(f, "XCH\t{}", address),
         }
     }
