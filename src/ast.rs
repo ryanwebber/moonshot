@@ -60,6 +60,32 @@ pub enum Expression {
     VariableReference(ValueIdentifier),
 }
 
+impl Expression {
+    pub fn brief(&self) -> ExpressionBrief {
+        ExpressionBrief { expression: self }
+    }
+}
+
+pub struct ExpressionBrief<'a> {
+    expression: &'a Expression,
+}
+
+impl std::fmt::Display for ExpressionBrief<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.expression {
+            Expression::FunctionCall { function, arguments } => {
+                write!(f, "{}(", function)?;
+                for arg in arguments.iter() {
+                    write!(f, "{}:", arg.name)?;
+                }
+                write!(f, ")")
+            }
+            Expression::NumberLiteral(n) => write!(f, "{}", n),
+            Expression::VariableReference(v) => write!(f, "{}", v),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Argument {
     pub name: String,

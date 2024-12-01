@@ -99,7 +99,7 @@ mod tests {
             ] {
                 32;
                 thirty_two;
-                let z: s = \"\";
+                let z: s = 32;
             }
         "};
 

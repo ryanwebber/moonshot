@@ -1,14 +1,9 @@
-use std::{
-    borrow::Cow,
-    collections::{HashMap, HashSet},
-    fmt::{self, Formatter},
-    path::PathBuf,
-    rc::Rc,
-};
+use std::{collections::HashMap, path::PathBuf, rc::Rc};
 
 use crate::{
     agc::{Address, Instruction},
     ast::{Block, Directive, Expression, Statement, ValueDeclaration, ValueIdentifier},
+    generator::{Archive, Generator, Label, Location, Output, Slot},
     loader::Program,
     types::Numeric,
 };
@@ -26,7 +21,7 @@ impl Compiler {
 }
 
 struct State {
-    output: Output,
+    generator: Generator,
     label_generator: LabelGenerator,
     constant_pool: ConstantPool,
 }
@@ -34,24 +29,24 @@ struct State {
 impl State {
     fn new() -> Self {
         Self {
-            output: Output::new(),
+            generator: Generator::new(),
             label_generator: LabelGenerator::new(),
             constant_pool: ConstantPool::new(),
         }
     }
 
     pub fn compile(mut self, program: &Program) -> anyhow::Result<Output> {
-        self.output.data.enqueue_comment("DSKY REGISTERS AND FLAGS");
-        self.output.data.reserve_word(Label::from_static("DSKYREG1"));
-        self.output.data.reserve_word(Label::from_static("DSKYSGN1"));
-        self.output.data.reserve_word(Label::from_static("DSKYREG2"));
-        self.output.data.reserve_word(Label::from_static("DSKYSGN2"));
-        self.output.data.reserve_word(Label::from_static("DSKYREG3"));
-        self.output.data.reserve_word(Label::from_static("DSKYSGN3"));
-        self.output.data.reserve_word(Label::from_static("DSKYPROG"));
-        self.output.data.reserve_word(Label::from_static("DSKYNOUN"));
-        self.output.data.reserve_word(Label::from_static("DSKYVERB"));
-        self.output.data.reserve_word(Label::from_static("DSKYMASK"));
+        self.generator.data_mut().enqueue_comment("DSKY REGISTERS AND FLAGS");
+        self.generator.data_mut().reserve_word(Label::from_static("DSKYREG1"));
+        self.generator.data_mut().reserve_word(Label::from_static("DSKYSGN1"));
+        self.generator.data_mut().reserve_word(Label::from_static("DSKYREG2"));
+        self.generator.data_mut().reserve_word(Label::from_static("DSKYSGN2"));
+        self.generator.data_mut().reserve_word(Label::from_static("DSKYREG3"));
+        self.generator.data_mut().reserve_word(Label::from_static("DSKYSGN3"));
+        self.generator.data_mut().reserve_word(Label::from_static("DSKYPROG"));
+        self.generator.data_mut().reserve_word(Label::from_static("DSKYNOUN"));
+        self.generator.data_mut().reserve_word(Label::from_static("DSKYVERB"));
+        self.generator.data_mut().reserve_word(Label::from_static("DSKYMASK"));
 
         let mut environment = Environment::new();
 
@@ -101,20 +96,20 @@ impl State {
                 function.path.display()
             );
 
-            self.output
-                .code
+            self.generator
+                .code_mut()
                 .enqueue_line_break()
                 .enqueue_label(function.entry_point.clone())
                 .enqueue_comment(comment);
 
             let mut workspace = Workspace::create(function.clone());
             self.compile_function(&environment, &function.body, &mut workspace)?;
-            workspace.write(&mut self.output);
+            workspace.write(self.generator.data_mut());
         }
 
         // Emit an exit instruction just to avoid falling through into constants
-        self.output
-            .code
+        self.generator
+            .code_mut()
             .append(Instruction::TC(Address::Relative {
                 label: Label::from_static("EXIT"),
                 offset: 0,
@@ -123,29 +118,38 @@ impl State {
             .with_preceding_line_break();
 
         if !self.constant_pool.constants.is_empty() {
-            self.output.code.enqueue_line_break().enqueue_comment("CONSTANT POOL");
+            self.generator
+                .code_mut()
+                .enqueue_line_break()
+                .enqueue_comment("CONSTANT POOL");
             for (constant, label) in self.constant_pool.constants.into_iter() {
-                self.output.code.append(Instruction::DEC(constant)).with_label(label);
+                self.generator.code_mut().append(Instruction::DEC(constant)).with_label(label);
             }
         }
 
-        Ok(self.output)
+        Ok(self.generator.into_output())
     }
 
     fn compile_function(&mut self, environment: &Environment, block: &Block, workspace: &mut Workspace) -> anyhow::Result<()> {
         // Store the Q register in the return slot so we can ret to it
-        self.copy_reg_q_to_slot(workspace.function.header.ret_addr_slot());
+        self.generator.copy_reg_q_to_slot(workspace.function.header.ret_addr_slot());
 
         for statement in block.statements.iter() {
             match statement {
                 Statement::Definition(definition) => {
+                    self.generator.code_mut().enqueue_comment(format!(
+                        "{} := {}",
+                        definition.declaration.identifier,
+                        definition.expression.brief()
+                    ));
+
                     let lhs = workspace.insert(definition.declaration.identifier.clone());
                     let rhs = self.compile_expression(environment, &definition.expression, &workspace)?;
                     if let Some(rhs) = rhs {
-                        self.copy_slot_to_reg_a(rhs);
-                        self.copy_reg_a_to_slot(lhs);
+                        self.generator.copy_slot_to_reg_a(rhs);
+                        self.generator.copy_reg_a_to_slot(lhs);
                     } else {
-                        anyhow::bail!("RHS expression does not produce a value");
+                        anyhow::bail!("RHS expression does not produce a value: {}", definition.expression.brief());
                     }
                 }
                 Statement::Expression(expression) => {
@@ -155,8 +159,8 @@ impl State {
         }
 
         // Put the return value back in the Q register and return
-        self.copy_slot_to_reg_q(workspace.function.header.ret_addr_slot());
-        self.output.code.append(Instruction::RETURN);
+        self.generator.copy_slot_to_reg_q(workspace.function.header.ret_addr_slot());
+        self.generator.code_mut().append(Instruction::RETURN);
 
         Ok(())
     }
@@ -205,17 +209,19 @@ impl State {
                             )
                         })?;
 
+                    self.generator
+                        .code_mut()
+                        .enqueue_comment(format!("ARGUMENT '{}'", argument.name));
                     let rhs = self
                         .compile_expression(environment, &argument.expression, workspace)?
                         .ok_or_else(|| anyhow::anyhow!("Argument {} does not produce a value", i))?;
 
-                    self.output.code.enqueue_comment(format!("ARGUMENT '{}'", argument.name));
-                    self.copy_slot_to_reg_a(rhs);
-                    self.copy_reg_a_to_slot(lhs);
+                    self.generator.copy_slot_to_reg_a(rhs);
+                    self.generator.copy_reg_a_to_slot(lhs);
                 }
 
-                self.output
-                    .code
+                self.generator
+                    .code_mut()
                     .append(Instruction::TC(Address::Relative {
                         label: resolved_function.entry_point.clone(),
                         offset: 0,
@@ -224,42 +230,6 @@ impl State {
 
                 Ok(Some(resolved_function.header.ret_value_slot()))
             }
-        }
-    }
-
-    fn copy_slot_to_reg_a(&mut self, slot: Slot) {
-        if slot.location == Location::Fixed {
-            self.output.code.append(Instruction::CAF(slot.into()));
-        } else {
-            self.output.code.append(Instruction::CAE(slot.into()));
-        }
-    }
-
-    fn copy_reg_a_to_slot(&mut self, slot: Slot) {
-        if slot.location == Location::Fixed {
-            panic!("Cannot write to a fixed location");
-        } else {
-            self.output.code.append(Instruction::XCH(slot.into()));
-        }
-    }
-
-    fn copy_slot_to_reg_q(&mut self, slot: Slot) {
-        if slot.location == Location::Fixed {
-            self.copy_slot_to_reg_a(slot);
-            self.output.code.append(Instruction::QXCH(Address::Relative {
-                label: Label::from_static("A"),
-                offset: 0,
-            }));
-        } else {
-            self.output.code.append(Instruction::QXCH(slot.into()));
-        }
-    }
-
-    fn copy_reg_q_to_slot(&mut self, slot: Slot) {
-        if slot.location == Location::Fixed {
-            panic!("Cannot write to a fixed location");
-        } else {
-            self.output.code.append(Instruction::QXCH(slot.into()));
         }
     }
 }
@@ -348,16 +318,16 @@ impl Header {
         self.parameters.len() + Self::DATA_FRAME_VARIABLE_OFFSET
     }
 
-    fn write_slots(&self, output: &mut Output) {
+    fn write_slots(&self, data: &mut Archive) {
         // Return address slot
-        output.data.append(Instruction::ERASE);
+        data.append(Instruction::ERASE);
 
         // Return value slot
-        output.data.append(Instruction::ERASE);
+        data.append(Instruction::ERASE);
 
         // Parameter slots
         for (i, parameter) in self.parameters.iter().enumerate() {
-            output.data.append(Instruction::ERASE).with_comment(format!(
+            data.append(Instruction::ERASE).with_comment(format!(
                 "PARAMETER '{}' (+{})",
                 parameter,
                 i + Self::DATA_FRAME_VARIABLE_OFFSET
@@ -407,10 +377,8 @@ impl Workspace {
         None
     }
 
-    fn write(&self, output: &mut Output) {
-        output
-            .data
-            .enqueue_line_break()
+    fn write(&self, data: &mut Archive) {
+        data.enqueue_line_break()
             .enqueue_comment(format!(
                 "WORKSPACE :: {} ({})",
                 self.function.name,
@@ -419,168 +387,13 @@ impl Workspace {
             .enqueue_label(self.function.header.data_frame.clone());
 
         // Header slots
-        self.function.header.write_slots(output);
+        self.function.header.write_slots(data);
 
         // Local slots
         for (name, offset) in self.locals.iter() {
-            output
-                .data
-                .append(Instruction::ERASE)
-                .with_comment(format!("LOCAL '{}' (+{})", name, offset,));
+            data.append(Instruction::ERASE)
+                .with_comment(format!("LOCAL '{}' (+{})", name, offset));
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Slot {
-    pub label: Label,
-    pub offset: i32,
-    pub location: Location,
-}
-
-impl Into<Address> for Slot {
-    fn into(self) -> Address {
-        Address::Relative {
-            label: self.label,
-            offset: self.offset,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Location {
-    Erasable,
-    Fixed,
-}
-
-#[derive(Debug, Clone)]
-pub struct Output {
-    pub data: Archive,
-    pub code: Archive,
-}
-
-impl Output {
-    pub fn new() -> Self {
-        Self {
-            data: Archive::new(),
-            code: Archive::new(),
-        }
-    }
-
-    pub fn to_yul_assembly(&self) -> String {
-        let code = self.code.writer();
-        let data = self.data.writer();
-        format!(include_str!("embed.agc.in"), code = code, data = data, entrypoint = "SYSMAIN")
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Archive {
-    pub instructions: Vec<Instruction>,
-    pub labels: HashMap<usize, Label>,
-    pub comments: HashMap<usize, String>,
-    pub line_breaks: HashSet<usize>,
-}
-
-impl Archive {
-    pub fn new() -> Self {
-        Self {
-            instructions: Vec::new(),
-            labels: HashMap::new(),
-            comments: HashMap::new(),
-            line_breaks: HashSet::new(),
-        }
-    }
-
-    pub fn writer<'a>(&'a self) -> impl std::fmt::Display + 'a {
-        ArchiveWriter { archive: self }
-    }
-
-    pub fn append<'a>(&'a mut self, instruction: Instruction) -> InstructionDecorator<'a> {
-        let position = self.instructions.len();
-        self.instructions.push(instruction);
-        InstructionDecorator { archive: self, position }
-    }
-
-    pub fn reserve_word<'a>(&'a mut self, label: Label) -> InstructionDecorator<'a> {
-        self.append(Instruction::ERASE).with_label(label)
-    }
-
-    pub fn enqueue_line_break<'a>(&'a mut self) -> &'a mut Self {
-        self.line_breaks.insert(self.instructions.len());
-        self
-    }
-
-    pub fn enqueue_comment<'a>(&'a mut self, comment: impl Into<String>) -> &'a mut Self {
-        self.comments.insert(self.instructions.len(), comment.into());
-        self
-    }
-
-    pub fn enqueue_label<'a>(&'a mut self, label: Label) -> &'a mut Self {
-        self.labels.insert(self.instructions.len(), label);
-        self
-    }
-}
-
-pub struct InstructionDecorator<'a> {
-    archive: &'a mut Archive,
-    position: usize,
-}
-
-impl InstructionDecorator<'_> {
-    pub fn with_comment(self, comment: impl Into<String>) -> Self {
-        self.archive.comments.insert(self.position, comment.into());
-        self
-    }
-
-    pub fn with_label(self, label: Label) -> Self {
-        self.archive.labels.insert(self.position, label);
-        self
-    }
-
-    pub fn with_preceding_line_break(self) -> Self {
-        self.archive.line_breaks.insert(self.position);
-        self
-    }
-}
-
-struct ArchiveWriter<'a> {
-    archive: &'a Archive,
-}
-
-impl std::fmt::Display for ArchiveWriter<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let archive = self.archive;
-
-        for (i, instruction) in archive.instructions.iter().enumerate() {
-            if archive.line_breaks.contains(&i) {
-                writeln!(f)?;
-            }
-
-            let (comment, label) = (archive.comments.get(&i), archive.labels.get(&i));
-
-            if let Some(comment) = comment {
-                if label.is_some() {
-                    writeln!(f, "# {}", comment)?;
-                } else {
-                    writeln!(f, "\t\t# {}", comment)?;
-                }
-            }
-
-            if let Some(label) = label {
-                write!(f, "{:.8}\t", label)?;
-                match label {
-                    Label::Static(s) if s.len() <= 4 => write!(f, "\t")?,
-                    _ => {}
-                }
-
-                writeln!(f, "{}", instruction)?;
-            } else {
-                writeln!(f, "\t\t{}", instruction)?;
-            }
-        }
-
-        Ok(())
     }
 }
 
@@ -602,27 +415,6 @@ impl LabelGenerator {
 
         self.next_identifier += 1;
         label
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum Label {
-    Static(Cow<'static, str>),
-    Generated { prefix: char, identifier: usize },
-}
-
-impl Label {
-    pub fn from_static(s: impl Into<Cow<'static, str>>) -> Self {
-        Label::Static(s.into())
-    }
-}
-
-impl fmt::Display for Label {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Label::Static(identifier) => write!(f, "{:.8}", identifier),
-            Label::Generated { prefix, identifier } => write!(f, "{}{:0>7X}", prefix, identifier),
-        }
     }
 }
 

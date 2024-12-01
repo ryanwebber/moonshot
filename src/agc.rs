@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::{compiler::Label, types::Numeric};
+use crate::{generator::Label, types::Numeric};
 
 #[derive(Debug, PartialEq, Clone, Eq, Hash)]
 pub enum Instruction {
