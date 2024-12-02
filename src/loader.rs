@@ -1,37 +1,49 @@
-use std::{collections::HashMap, marker::PhantomData, path::PathBuf, rc::Rc};
+use std::{collections::HashMap, marker::PhantomData, path::PathBuf};
 
 use crate::ast::{Directive, ProgramFragment};
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ModuleIdentifier(String);
+
 pub struct Program {
-    pub compilation_units: Vec<CompilationUnit>,
+    pub compilation_units: HashMap<ModuleIdentifier, CompilationUnit>,
 }
 
 impl Program {
-    pub fn single_source(reference: SourceReference, fragment: ProgramFragment) -> Self {
+    pub fn new() -> Self {
         Self {
-            compilation_units: vec![CompilationUnit {
-                reference,
-                fragment: Rc::new(fragment),
-                _namespace_lookup: HashMap::new(),
-            }],
+            compilation_units: HashMap::new(),
         }
+    }
+
+    pub fn new_with_units(units: impl IntoIterator<Item = CompilationUnit>) -> Self {
+        Self {
+            compilation_units: units.into_iter().map(|unit| (unit.identifier.clone(), unit)).collect(),
+        }
+    }
+
+    pub fn new_with_source(source: SourceReference, fragment: ProgramFragment) -> Self {
+        let identifier = source.to_string();
+        let mut compilation_units = HashMap::new();
+        compilation_units.insert(
+            ModuleIdentifier(identifier.clone()),
+            CompilationUnit {
+                identifier: ModuleIdentifier(identifier),
+                reference: source,
+                aliases: HashMap::new(),
+                fragment,
+            },
+        );
+
+        Self { compilation_units }
     }
 }
 
 pub struct CompilationUnit {
-    reference: SourceReference,
-    fragment: Rc<ProgramFragment>,
-    _namespace_lookup: HashMap<String, Rc<ProgramFragment>>,
-}
-
-impl CompilationUnit {
-    pub fn reference(&self) -> &SourceReference {
-        &self.reference
-    }
-
-    pub fn fragment(&self) -> &ProgramFragment {
-        &self.fragment
-    }
+    pub identifier: ModuleIdentifier,
+    pub reference: SourceReference,
+    pub fragment: ProgramFragment,
+    pub aliases: HashMap<String, ModuleIdentifier>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,15 +78,20 @@ impl SourceLoader {
             unimplemented!("Multiple file support is not implemented yet");
         }
 
-        let main_compilation_unit = CompilationUnit {
-            reference: SourceReference::Path(entry_point.clone()),
-            fragment: Rc::new(fragment),
-            _namespace_lookup: HashMap::new(),
-        };
+        let identifier = String::from("main");
 
-        Ok(Program {
-            compilation_units: vec![main_compilation_unit],
-        })
+        let mut compilation_units = HashMap::new();
+        compilation_units.insert(
+            ModuleIdentifier(identifier.clone()),
+            CompilationUnit {
+                identifier: ModuleIdentifier(identifier),
+                reference: SourceReference::Path(entry_point.clone()),
+                aliases: HashMap::new(),
+                fragment,
+            },
+        );
+
+        Ok(Program { compilation_units })
     }
 }
 

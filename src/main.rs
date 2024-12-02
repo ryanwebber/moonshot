@@ -17,7 +17,7 @@ fn try_main() -> anyhow::Result<()> {
     let program = source_loader.parse_and_load(source_reader, &file_path)?;
 
     let compiler = Compiler::new();
-    let output = compiler.compile(&program)?;
+    let output = compiler.compile(program)?;
     println!("{}", output.to_yul_assembly());
 
     Ok(())

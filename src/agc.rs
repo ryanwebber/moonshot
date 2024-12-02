@@ -76,7 +76,6 @@ impl Display for Address {
         use Address::*;
         match self {
             Relative { label, offset } => match *offset {
-                0 => write!(f, "{}", label),
                 offset if offset < 0 => write!(f, "{} - {}", label, -offset),
                 offset => write!(f, "{} + {}", label, offset),
             },

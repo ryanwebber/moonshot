@@ -25,8 +25,9 @@ pub fn run_test<T: TestCase>() {
     }
 
     let ast = parser::parse(T::SOURCE).expect("Failed to parse source");
-    let program = Program::single_source(SourceReference::Labelled(String::from(T::NAME)), ast);
-    let output = Compiler::new().compile(&program).expect("Compilation failed");
+    let program = Program::new_with_source(SourceReference::Labelled(String::from(T::NAME)), ast);
+
+    let output = Compiler::new().compile(program).expect("Compilation failed");
     let assembly = output.to_yul_assembly();
 
     // Write the assembly to a  file so we can call yaAGC on it

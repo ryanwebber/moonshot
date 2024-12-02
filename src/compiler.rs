@@ -1,4 +1,4 @@
-use std::{collections::HashMap, rc::Rc};
+use std::{borrow::Cow, collections::HashMap, rc::Rc};
 
 use anyhow::Ok;
 
@@ -6,7 +6,7 @@ use crate::{
     agc::{Address, Instruction},
     ast::{AssemblyOperand, BinaryOperator, Block, Directive, Expression, Statement, ValueDeclaration, ValueIdentifier},
     generator::{Archive, Generator, Label, Location, Output, Slot},
-    loader::{Program, SourceReference},
+    loader::{CompilationUnit, ModuleIdentifier, Program, SourceReference},
     types::Numeric,
 };
 
@@ -17,14 +17,13 @@ impl Compiler {
         Self {}
     }
 
-    pub fn compile(&self, program: &Program) -> anyhow::Result<Output> {
+    pub fn compile(&self, program: Program) -> anyhow::Result<Output> {
         State::new().compile(program)
     }
 }
 
 struct State {
     generator: Generator,
-    label_generator: LabelGenerator,
     constant_pool: ConstantPool,
 }
 
@@ -32,12 +31,11 @@ impl State {
     fn new() -> Self {
         Self {
             generator: Generator::new(),
-            label_generator: LabelGenerator::new(),
             constant_pool: ConstantPool::new(),
         }
     }
 
-    pub fn compile(mut self, program: &Program) -> anyhow::Result<Output> {
+    pub fn compile(mut self, program: Program) -> anyhow::Result<Output> {
         self.generator.data_mut().enqueue_comment("DSKY REGISTERS AND FLAGS");
         self.generator.data_mut().reserve_word(Label::from_static("DSKYREG1"));
         self.generator.data_mut().reserve_word(Label::from_static("DSKYSGN1"));
@@ -50,21 +48,24 @@ impl State {
         self.generator.data_mut().reserve_word(Label::from_static("DSKYVERB"));
         self.generator.data_mut().reserve_word(Label::from_static("DSKYMASK"));
 
-        let mut environment = Environment::new();
+        let mut world: World = World::new();
+        let mut label_generator = LabelGenerator::new();
 
-        for unit in &program.compilation_units {
-            for directive in &unit.fragment().directives {
+        // First pass: catalog all functions and top level declarations
+        for (_, unit) in program.compilation_units.into_iter() {
+            let mut functions = Vec::new();
+            for directive in unit.fragment.directives.iter() {
                 match directive {
                     Directive::Include { .. } => {}
                     Directive::UserProgram { .. } => {}
                     Directive::State {
                         name, parameters, body, ..
                     } => {
-                        let label: Label = self.label_generator.generate('S');
-                        let header = Header::create(self.label_generator.generate('W'), parameters);
-                        environment.insert_function(Function {
+                        let label: Label = label_generator.generate('S');
+                        let header = Header::create(label_generator.generate('W'), &parameters);
+                        functions.push(Function {
                             name: name.clone(),
-                            source: unit.reference().clone(),
+                            source: unit.reference.clone(),
                             entry_point: label.clone(),
                             body: body.clone(),
                             kind: FunctionKind::State,
@@ -72,11 +73,11 @@ impl State {
                         });
                     }
                     Directive::Subroutine { name, parameters, body } => {
-                        let label = self.label_generator.generate('F');
-                        let header = Header::create(self.label_generator.generate('W'), parameters);
-                        environment.insert_function(Function {
+                        let label = label_generator.generate('F');
+                        let header = Header::create(label_generator.generate('W'), &parameters);
+                        functions.push(Function {
                             name: name.clone(),
-                            source: unit.reference().clone(),
+                            source: unit.reference.clone(),
                             entry_point: label.clone(),
                             body: body.clone(),
                             kind: FunctionKind::Subroutine,
@@ -85,28 +86,36 @@ impl State {
                     }
                 }
             }
+
+            world.insert_module(Module::new(unit, functions));
         }
 
-        for function in environment.iter_functions().collect::<Vec<_>>() {
-            let comment = format!(
-                "{} :: {} ({})",
-                match function.kind {
-                    FunctionKind::State => "STATE",
-                    FunctionKind::Subroutine => "SUBROUTINE",
-                },
-                function.name,
-                function.source
-            );
+        // Second pass: compile all functions
+        for (identifier, module) in world.modules.iter() {
+            for function in module.iter_functions() {
+                let comment = format!(
+                    "{} :: {} ({})",
+                    match function.kind {
+                        FunctionKind::State => "STATE",
+                        FunctionKind::Subroutine => "SUBROUTINE",
+                    },
+                    function.name,
+                    function.source
+                );
 
-            self.generator
-                .code_mut()
-                .enqueue_line_break()
-                .enqueue_label(function.entry_point.clone())
-                .enqueue_comment(comment);
+                self.generator
+                    .code_mut()
+                    .enqueue_line_break()
+                    .enqueue_label(function.entry_point.clone())
+                    .enqueue_comment(comment);
 
-            let mut workspace = Workspace::create(function.clone());
-            self.compile_function(&environment, &function.body, &mut workspace)?;
-            workspace.write(self.generator.data_mut());
+                let environment = Environment::wrapping(&world, identifier.clone());
+                let mut workspace = Workspace::create(function.clone());
+
+                self.compile_function(&environment, &mut workspace, &function)?;
+
+                workspace.write(self.generator.data_mut());
+            }
         }
 
         // Compile in the SYSMAIN entry point
@@ -116,19 +125,18 @@ impl State {
             .enqueue_comment("SYSMAIN ENTRY POINT")
             .enqueue_line_break();
 
-        self.generator
-            .code_mut()
-            .append(if let Some(main) = environment.resolve_function("main") {
-                Instruction::TC(Address::Relative {
-                    label: main.entry_point.clone(),
-                    offset: 0,
-                })
-            } else {
-                Instruction::TC(Address::Relative {
-                    label: Label::from_static("SYSMAIN"),
-                    offset: 0,
-                })
-            });
+        let main_function = world.modules.iter().find_map(|(_, module)| module.find_function("main"));
+        self.generator.code_mut().append(if let Some(main) = main_function {
+            Instruction::TC(Address::Relative {
+                label: main.entry_point.clone(),
+                offset: 0,
+            })
+        } else {
+            Instruction::TC(Address::Relative {
+                label: Label::from_static("SYSMAIN"),
+                offset: 0,
+            })
+        });
 
         // Emit an exit instruction just to avoid falling through into constants
         self.generator
@@ -145,20 +153,27 @@ impl State {
             self.generator
                 .code_mut()
                 .enqueue_line_break()
-                .enqueue_comment("CONSTANT POOL");
-            for (constant, label) in self.constant_pool.constants.into_iter() {
-                self.generator.code_mut().append(Instruction::DEC(constant)).with_label(label);
+                .enqueue_comment("CONSTANT POOL")
+                .enqueue_label(ConstantPool::LABEL);
+
+            for constant in self.constant_pool.into_slots() {
+                self.generator.code_mut().append(Instruction::DEC(constant));
             }
         }
 
         Ok(self.generator.into_output())
     }
 
-    fn compile_function(&mut self, environment: &Environment, block: &Block, workspace: &mut Workspace) -> anyhow::Result<()> {
+    fn compile_function(
+        &mut self,
+        environment: &Environment,
+        workspace: &mut Workspace,
+        function: &Function,
+    ) -> anyhow::Result<()> {
         // Store the Q register in the return slot so we can ret to it
         self.generator.copy_reg_q_to_slot(workspace.function.header.ret_addr_slot());
 
-        for statement in block.statements.iter() {
+        for statement in function.body.statements.iter() {
             match statement {
                 Statement::Definition(definition) => {
                     self.generator.code_mut().enqueue_comment(format!(
@@ -168,7 +183,7 @@ impl State {
                     ));
 
                     let lhs = workspace.insert(definition.declaration.identifier.clone());
-                    let rhs = self.compile_expression(environment, &definition.expression, workspace)?;
+                    let rhs = self.compile_expression(environment, workspace, &definition.expression)?;
                     if let Some(rhs) = rhs {
                         self.generator.copy_slot_to_reg_a(rhs);
                         self.generator.copy_reg_a_to_slot(lhs);
@@ -177,7 +192,7 @@ impl State {
                     }
                 }
                 Statement::Expression(expression) => {
-                    self.compile_expression(environment, expression, workspace)?;
+                    self.compile_expression(environment, workspace, expression)?;
                 }
                 Statement::InlineAssembly(source) => {
                     let instruction = if let Some(operand) = &source.operand {
@@ -205,7 +220,7 @@ impl State {
                         self.generator
                             .code_mut()
                             .enqueue_comment(format!("RETURN {}", expression.brief()));
-                        let ret_value = self.compile_expression(environment, expression, workspace)?;
+                        let ret_value = self.compile_expression(environment, workspace, expression)?;
                         if let Some(ret_value) = ret_value {
                             self.generator.copy_slot_to_reg_a(ret_value);
                             self.generator.copy_reg_a_to_slot(workspace.function.header.ret_value_slot());
@@ -232,13 +247,13 @@ impl State {
     fn compile_expression(
         &mut self,
         environment: &Environment,
-        expression: &Expression,
         workspace: &mut Workspace,
+        expression: &Expression,
     ) -> anyhow::Result<Option<Slot>> {
         match expression {
             Expression::BinaryOperation { op, lhs, rhs } => {
-                let lhs_slot = self.compile_expression(environment, lhs, workspace)?;
-                let rhs_slot = self.compile_expression(environment, rhs, workspace)?;
+                let lhs_slot = self.compile_expression(environment, workspace, lhs)?;
+                let rhs_slot = self.compile_expression(environment, workspace, rhs)?;
                 let lhs_slot = lhs_slot.ok_or_else(|| anyhow::anyhow!("LHS does not produce a value: {}", lhs.brief()))?;
                 let rhs_slot = rhs_slot.ok_or_else(|| anyhow::anyhow!("RHS does not produce a value: {}", rhs.brief()))?;
                 let temporary = workspace.allocate_temporary();
@@ -260,8 +275,10 @@ impl State {
             }
             Expression::FunctionCall { function, arguments } => {
                 let resolved_function = match function {
-                    ValueIdentifier::Implicit(name) => environment.resolve_function(name),
-                    ValueIdentifier::Namespaced(..) => unimplemented!("Support for namespaced identifiers"),
+                    ValueIdentifier::Implicit(function_name) => environment.current_module().find_function(&function_name),
+                    ValueIdentifier::Namespaced(module_alias, function_name) => environment
+                        .find_included_module(&module_alias)
+                        .and_then(|module| module.find_function(&function_name)),
                 };
 
                 let Some(resolved_function) = resolved_function else {
@@ -284,7 +301,7 @@ impl State {
                         .code_mut()
                         .enqueue_comment(format!("ARGUMENT '{}'", argument.name));
                     let rhs = self
-                        .compile_expression(environment, &argument.expression, workspace)?
+                        .compile_expression(environment, workspace, &argument.expression)?
                         .ok_or_else(|| anyhow::anyhow!("Argument {} does not produce a value", i))?;
 
                     self.generator.copy_slot_to_reg_a(rhs);
@@ -302,12 +319,8 @@ impl State {
                 Ok(Some(resolved_function.header.ret_value_slot()))
             }
             Expression::NumberLiteral(value) => {
-                let label = self.constant_pool.get_or_insert(&mut self.label_generator, value.clone());
-                Ok(Some(Slot {
-                    label,
-                    offset: 0,
-                    location: Location::Fixed,
-                }))
+                let slot = self.constant_pool.get_or_insert(value.clone());
+                Ok(Some(slot))
             }
             Expression::VariableReference(identifier) => match identifier {
                 ValueIdentifier::Implicit(name) => workspace
@@ -320,27 +333,67 @@ impl State {
     }
 }
 
-struct Environment {
+struct World {
+    modules: HashMap<ModuleIdentifier, Module>,
+}
+
+impl World {
+    fn new() -> Self {
+        Self { modules: HashMap::new() }
+    }
+
+    fn insert_module(&mut self, module: Module) {
+        self.modules.insert(module.unit.identifier.clone(), module);
+    }
+}
+
+struct Module {
+    unit: CompilationUnit,
     functions: HashMap<String, Rc<Function>>,
 }
 
-impl Environment {
-    fn new() -> Self {
+impl Module {
+    fn new(unit: CompilationUnit, functions: impl IntoIterator<Item = Function>) -> Self {
         Self {
-            functions: HashMap::new(),
+            unit,
+            functions: {
+                let mut map = HashMap::new();
+                for function in functions.into_iter() {
+                    map.insert(function.name.clone(), Rc::new(function));
+                }
+
+                map
+            },
         }
     }
 
-    fn insert_function(&mut self, function: Function) {
-        self.functions.insert(function.name.clone(), Rc::new(function));
-    }
-
-    fn resolve_function(&self, name: &str) -> Option<&Function> {
+    fn find_function(&self, name: &str) -> Option<&Function> {
         self.functions.get(name).map(|f| f.as_ref())
     }
 
     fn iter_functions<'a>(&'a self) -> impl Iterator<Item = Rc<Function>> + 'a {
         self.functions.values().cloned()
+    }
+}
+
+struct Environment<'a> {
+    world: &'a World,
+    current_module: ModuleIdentifier,
+}
+
+impl<'a> Environment<'a> {
+    fn wrapping(world: &'a World, current_module: ModuleIdentifier) -> Self {
+        Self { world, current_module }
+    }
+}
+
+impl Environment<'_> {
+    fn current_module(&self) -> &Module {
+        self.world.modules.get(&self.current_module).unwrap()
+    }
+
+    fn find_included_module(&self, name: &str) -> Option<&Module> {
+        self.world.modules.get(self.current_module().unit.aliases.get(name)?)
     }
 }
 
@@ -362,23 +415,23 @@ enum FunctionKind {
 
 #[derive(Debug, Clone)]
 struct Header {
-    data_frame: Label,
+    data_start: Label,
     parameters: Vec<String>,
 }
 
 impl Header {
     const DATA_FRAME_VARIABLE_OFFSET: usize = 2;
 
-    fn create(data_frame: Label, parameters: &[ValueDeclaration]) -> Self {
+    fn create(data_start: Label, parameters: &[ValueDeclaration]) -> Self {
         Self {
-            data_frame,
+            data_start,
             parameters: parameters.iter().map(|p| p.identifier.clone()).collect(),
         }
     }
 
     fn ret_addr_slot(&self) -> Slot {
         Slot {
-            label: self.data_frame.clone(),
+            label: self.data_start.clone(),
             offset: 0,
             location: Location::Erasable,
         }
@@ -386,7 +439,7 @@ impl Header {
 
     fn ret_value_slot(&self) -> Slot {
         Slot {
-            label: self.data_frame.clone(),
+            label: self.data_start.clone(),
             offset: 1,
             location: Location::Erasable,
         }
@@ -394,7 +447,7 @@ impl Header {
 
     fn resolve_parameter_slot(&self, name: &str) -> Option<Slot> {
         self.parameters.iter().position(|p| p == name).map(|i| Slot {
-            label: self.data_frame.clone(),
+            label: self.data_start.clone(),
             offset: (i + Self::DATA_FRAME_VARIABLE_OFFSET) as i32,
             location: Location::Erasable,
         })
@@ -440,7 +493,7 @@ impl Workspace {
         self.locals.push((Some(name), offset));
         Slot {
             offset,
-            label: self.function.header.data_frame.clone(),
+            label: self.function.header.data_start.clone(),
             location: Location::Erasable,
         }
     }
@@ -450,7 +503,7 @@ impl Workspace {
         self.locals.push((None, offset));
         Slot {
             offset,
-            label: self.function.header.data_frame.clone(),
+            label: self.function.header.data_start.clone(),
             location: Location::Erasable,
         }
     }
@@ -459,7 +512,7 @@ impl Workspace {
         for (local, offset) in self.locals.iter() {
             if matches!(local, Some(local) if local == name) {
                 return Some(Slot {
-                    label: self.function.header.data_frame.clone(),
+                    label: self.function.header.data_start.clone(),
                     offset: *offset,
                     location: Location::Erasable,
                 });
@@ -476,7 +529,7 @@ impl Workspace {
     fn write(&self, data: &mut Archive) {
         data.enqueue_line_break()
             .enqueue_comment(format!("WORKSPACE :: {} ({})", self.function.name, self.function.source))
-            .enqueue_label(self.function.header.data_frame.clone());
+            .enqueue_label(self.function.header.data_start.clone());
 
         // Header slots
         self.function.header.write_slots(data);
@@ -514,24 +567,33 @@ impl LabelGenerator {
 }
 
 struct ConstantPool {
-    constants: HashMap<Numeric, Label>,
+    constants: HashMap<Numeric, i32>,
 }
 
 impl ConstantPool {
+    const LABEL: Label = Label::Static(Cow::Borrowed("CONSTS"));
+
     pub fn new() -> Self {
         Self {
             constants: HashMap::new(),
         }
     }
 
-    pub fn get_or_insert(&mut self, label_generator: &mut LabelGenerator, value: Numeric) -> Label {
-        if let Some(label) = self.constants.get(&value) {
-            return label.clone();
+    pub fn get_or_insert(&mut self, value: Numeric) -> Slot {
+        let next_offset = self.constants.len();
+        let offset = self.constants.entry(value).or_insert_with(|| next_offset as i32);
+        Slot {
+            label: Self::LABEL.clone(),
+            offset: *offset,
+            location: Location::Fixed,
         }
+    }
 
-        let label = label_generator.generate('C');
-        self.constants.insert(value, label.clone());
-        label
+    pub fn into_slots(&self) -> Vec<Numeric> {
+        // Sort the constants by their offset to get them in order
+        let mut constants: Vec<_> = self.constants.iter().collect();
+        constants.sort_by_key(|(_, offset)| *offset);
+        constants.into_iter().map(|(value, _)| value.clone()).collect()
     }
 }
 
