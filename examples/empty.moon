@@ -1,0 +1,3 @@
+state main () [] {
+    @`		TC	EXIT`;
+}

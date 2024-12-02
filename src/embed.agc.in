@@ -19,6 +19,9 @@ NEWJOB		=	67
 CLOCK		ERASE
 KEY		ERASE
 
+# USED FOR TESTING ONLY
+ASSRTVAL	ERASE
+
 # ***************** BEGIN CODE GENERATION *****************
 
 {data}

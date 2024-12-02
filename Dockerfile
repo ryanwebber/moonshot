@@ -1,4 +1,4 @@
-# AGC Toolchain
+# ========== AGC Toolchain ==========
 
 FROM alpine:3.17 as toolchain
 
@@ -12,9 +12,9 @@ RUN ls -l /tmp
 RUN tar -xvf virtualagc.tar.gz
 RUN cd virtualagc-20221005 && make yaAGC yaYUL 2>/dev/null
 
-# Application
+# ========== Application ==========
 
-FROM rust:1.66-alpine as application
+FROM rust:1.76-alpine as application
 
 RUN apk add musl-dev
 
@@ -23,8 +23,14 @@ COPY --from=toolchain /tmp/virtualagc-20221005/yaYUL/yaYUL /usr/local/bin
 
 WORKDIR /tmp
 
-COPY Cargo.toml Cargo.lock moonshot/
+COPY Cargo.toml Cargo.lock build.rs moonshot/
 COPY src moonshot/src/
+COPY tests moonshot/tests/
+COPY examples moonshot/examples/
 
-RUN cd moonshot && cargo install --path .
-RUN moonshot
+# Trigger a build to cache dependencies
+RUN cd /tmp/moonshot && cargo build
+
+# Run tests
+ENV MOONSHOT_RUN_INTEGRATION_TESTS=1
+RUN cd /tmp/moonshot && cargo test

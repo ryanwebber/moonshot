@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, rc::Rc};
+use std::{collections::HashMap, rc::Rc};
 
 use anyhow::Ok;
 
@@ -6,7 +6,7 @@ use crate::{
     agc::{Address, Instruction},
     ast::{BinaryOperator, Block, Directive, Expression, Statement, ValueDeclaration, ValueIdentifier},
     generator::{Archive, Generator, Label, Location, Output, Slot},
-    loader::Program,
+    loader::{Program, SourceReference},
     types::Numeric,
 };
 
@@ -64,7 +64,7 @@ impl State {
                         let header = Header::create(self.label_generator.generate('W'), parameters);
                         environment.insert_function(Function {
                             name: name.clone(),
-                            path: unit.path().clone(),
+                            source: unit.reference().clone(),
                             entry_point: label.clone(),
                             body: body.clone(),
                             kind: FunctionKind::State,
@@ -76,7 +76,7 @@ impl State {
                         let header = Header::create(self.label_generator.generate('W'), parameters);
                         environment.insert_function(Function {
                             name: name.clone(),
-                            path: unit.path().clone(),
+                            source: unit.reference().clone(),
                             entry_point: label.clone(),
                             body: body.clone(),
                             kind: FunctionKind::Subroutine,
@@ -95,7 +95,7 @@ impl State {
                     FunctionKind::Subroutine => "SUBROUTINE",
                 },
                 function.name,
-                function.path.display()
+                function.source
             );
 
             self.generator
@@ -108,6 +108,27 @@ impl State {
             self.compile_function(&environment, &function.body, &mut workspace)?;
             workspace.write(self.generator.data_mut());
         }
+
+        // Compile in the SYSMAIN entry point
+        self.generator
+            .code_mut()
+            .enqueue_label(Label::from_static("SYSMAIN"))
+            .enqueue_comment("SYSMAIN ENTRY POINT")
+            .enqueue_line_break();
+
+        self.generator
+            .code_mut()
+            .append(if let Some(main) = environment.resolve_function("main") {
+                Instruction::TC(Address::Relative {
+                    label: main.entry_point.clone(),
+                    offset: 0,
+                })
+            } else {
+                Instruction::TC(Address::Relative {
+                    label: Label::from_static("SYSMAIN"),
+                    offset: 0,
+                })
+            });
 
         // Emit an exit instruction just to avoid falling through into constants
         self.generator
@@ -156,6 +177,9 @@ impl State {
                 }
                 Statement::Expression(expression) => {
                     self.compile_expression(environment, expression, workspace)?;
+                }
+                Statement::InlineAssembly(source) => {
+                    self.generator.code_mut().append(Instruction::Literal(source.clone()));
                 }
                 Statement::Return(expression) => {
                     if let Some(expression) = expression {
@@ -304,7 +328,7 @@ impl Environment {
 #[derive(Debug, Clone)]
 struct Function {
     name: String,
-    path: PathBuf,
+    source: SourceReference,
     kind: FunctionKind,
     entry_point: Label,
     header: Header,
@@ -432,11 +456,7 @@ impl Workspace {
 
     fn write(&self, data: &mut Archive) {
         data.enqueue_line_break()
-            .enqueue_comment(format!(
-                "WORKSPACE :: {} ({})",
-                self.function.name,
-                self.function.path.display()
-            ))
+            .enqueue_comment(format!("WORKSPACE :: {} ({})", self.function.name, self.function.source))
             .enqueue_label(self.function.header.data_frame.clone());
 
         // Header slots

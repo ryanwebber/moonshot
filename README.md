@@ -49,6 +49,12 @@ sub calculate_next (current: i15) -> i15 {
     return current + 1;
 }
 
+sub inline_asm() {
+    @asm {
+        MYLABEL   TC  MYLABEL
+    }
+}
+
 ```
 
 ## Getting Started

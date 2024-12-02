@@ -36,6 +36,7 @@ pub struct Block {
 pub enum Statement {
     Definition(ValueDefinition),
     Expression(Expression),
+    InlineAssembly(String),
     Return(Option<Expression>),
 }
 

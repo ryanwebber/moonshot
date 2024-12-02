@@ -10,3 +10,6 @@ lalrpop = "0.22.0"
 anyhow = "1.0.93"
 indoc = "1.0"
 lalrpop-util = { version = "0.22.0", features = ["lexer"] }
+
+[dev-dependencies]
+regex = "1.11.1"

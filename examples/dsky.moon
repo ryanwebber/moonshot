@@ -15,3 +15,9 @@ sub add(a: i15, b: i15) {
     return 15 + 17;
     return;
 }
+
+sub test_inline_asm() {
+    @`		# SOME INLINE ASSEMBLY`;
+    @`TESTASM1	TC	TESTASM1`;
+    @`		CAE	NEWJOB`;
+}

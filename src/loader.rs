@@ -6,19 +6,47 @@ pub struct Program {
     pub compilation_units: Vec<CompilationUnit>,
 }
 
+impl Program {
+    pub fn single_source(reference: SourceReference, fragment: ProgramFragment) -> Self {
+        Self {
+            compilation_units: vec![CompilationUnit {
+                reference,
+                fragment: Rc::new(fragment),
+                _namespace_lookup: HashMap::new(),
+            }],
+        }
+    }
+}
+
 pub struct CompilationUnit {
-    path: PathBuf,
+    reference: SourceReference,
     fragment: Rc<ProgramFragment>,
     _namespace_lookup: HashMap<String, Rc<ProgramFragment>>,
 }
 
 impl CompilationUnit {
-    pub fn path(&self) -> &PathBuf {
-        &self.path
+    pub fn reference(&self) -> &SourceReference {
+        &self.reference
     }
 
     pub fn fragment(&self) -> &ProgramFragment {
         &self.fragment
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceReference {
+    Path(PathBuf),
+    Labelled(String),
+}
+
+impl std::fmt::Display for SourceReference {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use SourceReference::*;
+        match self {
+            Path(path) => write!(f, "{}", path.display()),
+            Labelled(label) => write!(f, "{}", label),
+        }
     }
 }
 
@@ -39,7 +67,7 @@ impl SourceLoader {
         }
 
         let main_compilation_unit = CompilationUnit {
-            path: entry_point.clone(),
+            reference: SourceReference::Path(entry_point.clone()),
             fragment: Rc::new(fragment),
             _namespace_lookup: HashMap::new(),
         };

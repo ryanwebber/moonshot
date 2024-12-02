@@ -14,6 +14,16 @@ pub enum Instruction {
     RETURN,
     TC(Address),
     XCH(Address),
+    Literal(String),
+}
+
+impl Instruction {
+    pub fn is_extend(&self) -> bool {
+        match self {
+            Instruction::QXCH(..) => true,
+            _ => false,
+        }
+    }
 }
 
 impl Display for Instruction {
@@ -30,6 +40,7 @@ impl Display for Instruction {
             RETURN => write!(f, "RETURN"),
             TC(address) => write!(f, "TC\t{}", address),
             XCH(address) => write!(f, "XCH\t{}", address),
+            Literal(s) => write!(f, "{}", s),
         }
     }
 }

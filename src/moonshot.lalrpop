@@ -45,6 +45,7 @@ pub Block: ast::Block = {
 pub Statement: ast::Statement = {
     "let" <ValueDefinition> => ast::Statement::Definition(<>),
     "return" <Expression?> => ast::Statement::Return(<>),
+    <l:AssemblyLiteral> => ast::Statement::InlineAssembly(l[2..l.len()-1].to_string()),
     <Expression> => ast::Statement::Expression(<>),
 }
 
@@ -152,7 +153,6 @@ match {
     "=",
     "\"",
     "::",
-    
     "as",
     "let",
     "goto",
@@ -164,6 +164,7 @@ match {
 
     r"[0-9]+" => Digits,
     r#""[^"]*""# => StringLiteral,
+    r"@`[^`]*`" => AssemblyLiteral,
 } else {
     ":",
     r"\.(\w|[0-9])*" => SpecifierLiteral,

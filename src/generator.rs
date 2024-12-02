@@ -192,12 +192,20 @@ impl std::fmt::Display for ArchiveWriter<'_> {
             if let Some(label) = label {
                 write!(f, "{:.8}\t", label)?;
                 match label {
-                    Label::Static(s) if s.len() <= 4 => write!(f, "\t")?,
+                    Label::Static(s) if s.len() < 8 => write!(f, "\t")?,
                     _ => {}
                 }
 
-                writeln!(f, "{}", instruction)?;
+                if instruction.is_extend() {
+                    writeln!(f, "EXTEND")?;
+                }
+                writeln!(f, "\t\t{}", instruction)?;
+            } else if let Instruction::Literal(s) = instruction {
+                writeln!(f, "{}", s)?;
             } else {
+                if instruction.is_extend() {
+                    writeln!(f, "\t\tEXTEND")?;
+                }
                 writeln!(f, "\t\t{}", instruction)?;
             }
         }

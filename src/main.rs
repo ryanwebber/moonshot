@@ -16,12 +16,6 @@ fn try_main() -> anyhow::Result<()> {
     let source_loader = SourceLoader::new();
     let program = source_loader.parse_and_load(source_reader, &file_path)?;
 
-    for unit in &program.compilation_units {
-        println!("{:#?}\n", unit.fragment());
-    }
-
-    println!();
-
     let compiler = Compiler::new();
     let output = compiler.compile(&program)?;
     println!("{}", output.to_yul_assembly());
