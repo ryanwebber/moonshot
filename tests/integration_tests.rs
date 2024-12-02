@@ -49,6 +49,9 @@ pub fn run_test<T: TestCase>() {
             .output()
             .expect("Failed to run yaAGC");
 
+        // Dump child stderr to our stderr
+        _ = std::io::stderr().write_all(&yaagc_output.stderr);
+
         assert!(yaagc_output.status.success());
     }
 

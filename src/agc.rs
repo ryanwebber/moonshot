@@ -14,7 +14,6 @@ pub enum Instruction {
     RETURN,
     TC(Address),
     XCH(Address),
-    Literal(String),
 }
 
 impl Instruction {
@@ -23,6 +22,29 @@ impl Instruction {
             Instruction::QXCH(..) => true,
             _ => false,
         }
+    }
+
+    pub fn from_str_with_address(instruction: &str, address: Address) -> Option<Self> {
+        use Instruction::*;
+        Some(match instruction {
+            "ADS" => ADS(address),
+            "CAE" => CAE(address),
+            "CAF" => CAF(address),
+            "QXCH" => QXCH(address),
+            "TC" => TC(address),
+            "XCH" => XCH(address),
+            _ => return None,
+        })
+    }
+
+    pub fn from_str(instruction: &str) -> Option<Self> {
+        use Instruction::*;
+        Some(match instruction {
+            "ERASE" => ERASE,
+            "NOOP" => NOOP,
+            "RETURN" => RETURN,
+            _ => return None,
+        })
     }
 }
 
@@ -40,7 +62,6 @@ impl Display for Instruction {
             RETURN => write!(f, "RETURN"),
             TC(address) => write!(f, "TC\t{}", address),
             XCH(address) => write!(f, "XCH\t{}", address),
-            Literal(s) => write!(f, "{}", s),
         }
     }
 }

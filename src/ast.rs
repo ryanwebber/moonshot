@@ -36,8 +36,20 @@ pub struct Block {
 pub enum Statement {
     Definition(ValueDefinition),
     Expression(Expression),
-    InlineAssembly(String),
+    InlineAssembly(AssemblyString),
     Return(Option<Expression>),
+}
+
+#[derive(Debug, Clone)]
+pub struct AssemblyString {
+    pub instruction: String,
+    pub operand: Option<AssemblyOperand>,
+}
+
+#[derive(Debug, Clone)]
+pub enum AssemblyOperand {
+    Label(String),
+    Reference(String),
 }
 
 #[derive(Debug, Clone)]

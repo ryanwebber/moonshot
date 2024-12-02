@@ -8,10 +8,10 @@ fn test() {
         const NAME: &'static str = "test_01_harness_validation";
         const SOURCE: &'static str = indoc::indoc! {r#"
             state main () [] {
-                @`		CAF	MYTEST`;
-                @`		XCH	ASSRTVAL`;
-                @`		TC	EXIT`;
-                @`MYTEST	DEC	1234`;
+                let x: i15 = 1234;
+                @asm CAE (x);
+                @asm XCH ASSRTVAL;
+                @asm TC EXIT;
             }
         "#};
 

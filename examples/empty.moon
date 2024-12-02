@@ -1,3 +1,5 @@
 state main () [] {
-    @`		TC	EXIT`;
+    let x: i15 = 1234;
+    @asm CAE (x);
+    @asm TC EXIT;
 }

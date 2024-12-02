@@ -4,7 +4,7 @@ use anyhow::Ok;
 
 use crate::{
     agc::{Address, Instruction},
-    ast::{BinaryOperator, Block, Directive, Expression, Statement, ValueDeclaration, ValueIdentifier},
+    ast::{AssemblyOperand, BinaryOperator, Block, Directive, Expression, Statement, ValueDeclaration, ValueIdentifier},
     generator::{Archive, Generator, Label, Location, Output, Slot},
     loader::{Program, SourceReference},
     types::Numeric,
@@ -179,7 +179,25 @@ impl State {
                     self.compile_expression(environment, expression, workspace)?;
                 }
                 Statement::InlineAssembly(source) => {
-                    self.generator.code_mut().append(Instruction::Literal(source.clone()));
+                    let instruction = if let Some(operand) = &source.operand {
+                        let address: Address = match operand {
+                            AssemblyOperand::Label(label) => Label::from_static(label.clone()).into(),
+                            AssemblyOperand::Reference(name) => workspace
+                                .resolve(name)
+                                .ok_or_else(|| anyhow::anyhow!("Variable reference not found: {}", name))?
+                                .into(),
+                        };
+
+                        Instruction::from_str_with_address(source.instruction.as_str(), address)
+                    } else {
+                        Instruction::from_str(source.instruction.as_str())
+                    };
+
+                    let Some(instruction) = instruction else {
+                        anyhow::bail!("Unknown assembly instruction: {}", source.instruction);
+                    };
+
+                    self.generator.code_mut().append(instruction);
                 }
                 Statement::Return(expression) => {
                     if let Some(expression) = expression {

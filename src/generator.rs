@@ -200,8 +200,6 @@ impl std::fmt::Display for ArchiveWriter<'_> {
                     writeln!(f, "EXTEND")?;
                 }
                 writeln!(f, "\t\t{}", instruction)?;
-            } else if let Instruction::Literal(s) = instruction {
-                writeln!(f, "{}", s)?;
             } else {
                 if instruction.is_extend() {
                     writeln!(f, "\t\tEXTEND")?;
@@ -245,6 +243,12 @@ pub enum Label {
 impl Label {
     pub fn from_static(s: impl Into<Cow<'static, str>>) -> Self {
         Label::Static(s.into())
+    }
+}
+
+impl Into<Address> for Label {
+    fn into(self) -> Address {
+        Address::Relative { label: self, offset: 0 }
     }
 }
 
