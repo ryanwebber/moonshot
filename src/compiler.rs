@@ -138,6 +138,7 @@ impl State {
                 offset: 0,
             }))
             .with_comment("END OF FUNCTIONS")
+            .with_label(Label::from_static("SYSEXIT"))
             .with_preceding_line_break();
 
         if !self.constant_pool.constants.is_empty() {

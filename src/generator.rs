@@ -198,8 +198,10 @@ impl std::fmt::Display for ArchiveWriter<'_> {
 
                 if instruction.is_extend() {
                     writeln!(f, "EXTEND")?;
+                    writeln!(f, "\t\t{}", instruction)?;
+                } else {
+                    writeln!(f, "{}", instruction)?;
                 }
-                writeln!(f, "\t\t{}", instruction)?;
             } else {
                 if instruction.is_extend() {
                     writeln!(f, "\t\tEXTEND")?;
