@@ -1,6 +1,3 @@
 state main () [] {
-    let x: i15 = 1234;
-    @asm CAE (x);
-    @asm XCH ASSRTVAL;
-    @asm TC EXIT;
+    $tests::exit_with(value: 1234);
 }

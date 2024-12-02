@@ -6,9 +6,15 @@ use crate::{
     agc::{Address, Instruction},
     ast::{AssemblyOperand, BinaryOperator, Block, Directive, Expression, Statement, ValueDeclaration, ValueIdentifier},
     generator::{Archive, Generator, Label, Location, Output, Slot},
-    loader::{CompilationUnit, ModuleIdentifier, Program, SourceReference},
+    loader::{ModuleIdentifier, Program, SourceReference},
+    parser::moonshot::ProgramFragmentParser,
     types::Numeric,
 };
+
+const STD_LIB_SOURCES: &[(&'static str, &'static str)] = &[
+    ("$tests", include_str!("stdlib/tests.moon")),
+    // TODO: More standard library sources
+];
 
 pub struct Compiler {}
 
@@ -36,6 +42,10 @@ impl State {
     }
 
     pub fn compile(mut self, program: Program) -> anyhow::Result<Output> {
+        let mut label_generator = LabelGenerator::new();
+        let mut world = World::create(&mut label_generator);
+
+        // Emit some data slots for stdlib stuff
         self.generator.data_mut().enqueue_comment("DSKY REGISTERS AND FLAGS");
         self.generator.data_mut().reserve_word(Label::from_static("DSKYREG1"));
         self.generator.data_mut().reserve_word(Label::from_static("DSKYSGN1"));
@@ -48,11 +58,8 @@ impl State {
         self.generator.data_mut().reserve_word(Label::from_static("DSKYVERB"));
         self.generator.data_mut().reserve_word(Label::from_static("DSKYMASK"));
 
-        let mut world: World = World::new();
-        let mut label_generator = LabelGenerator::new();
-
         // First pass: catalog all functions and top level declarations
-        for (_, unit) in program.compilation_units.into_iter() {
+        for (identifier, unit) in program.compilation_units.into_iter() {
             let mut functions = Vec::new();
             for directive in unit.fragment.directives.iter() {
                 match directive {
@@ -87,11 +94,11 @@ impl State {
                 }
             }
 
-            world.insert_module(Module::new(unit, functions));
+            world.insert_module(identifier, Module::new(unit.aliases, functions));
         }
 
         // Second pass: compile all functions
-        for (identifier, module) in world.modules.iter() {
+        for (identifier, module) in world.iter_modules() {
             for function in module.iter_functions() {
                 let comment = format!(
                     "{} :: {} ({})",
@@ -276,9 +283,13 @@ impl State {
             Expression::FunctionCall { function, arguments } => {
                 let resolved_function = match function {
                     ValueIdentifier::Implicit(function_name) => environment.current_module().find_function(&function_name),
-                    ValueIdentifier::Namespaced(module_alias, function_name) => environment
-                        .find_included_module(&module_alias)
-                        .and_then(|module| module.find_function(&function_name)),
+                    ValueIdentifier::Namespaced(module_alias, function_name) => {
+                        let module = environment
+                            .find_included_module(module_alias)
+                            .ok_or_else(|| anyhow::anyhow!("Module not found: {}", module_alias))?;
+
+                        module.find_function(function_name)
+                    }
                 };
 
                 let Some(resolved_function) = resolved_function else {
@@ -334,28 +345,43 @@ impl State {
 }
 
 struct World {
+    stdlib: Stdlib,
     modules: HashMap<ModuleIdentifier, Module>,
 }
 
 impl World {
-    fn new() -> Self {
-        Self { modules: HashMap::new() }
+    fn create(label_generator: &mut LabelGenerator) -> Self {
+        Self {
+            stdlib: Stdlib::create(label_generator),
+            modules: HashMap::new(),
+        }
     }
 
-    fn insert_module(&mut self, module: Module) {
-        self.modules.insert(module.unit.identifier.clone(), module);
+    fn insert_module(&mut self, identifier: ModuleIdentifier, module: Module) {
+        self.modules.insert(identifier, module);
+    }
+
+    fn iter_modules<'a>(&'a self) -> impl Iterator<Item = (ModuleIdentifier, &Module)> + 'a {
+        let module_iter = self.modules.iter().map(|(id, module)| (id.clone(), module));
+        let stdlib_iter = self
+            .stdlib
+            .modules
+            .iter()
+            .map(|(name, module)| (ModuleIdentifier::from(name), module));
+
+        module_iter.chain(stdlib_iter)
     }
 }
 
 struct Module {
-    unit: CompilationUnit,
+    aliases: HashMap<String, ModuleIdentifier>,
     functions: HashMap<String, Rc<Function>>,
 }
 
 impl Module {
-    fn new(unit: CompilationUnit, functions: impl IntoIterator<Item = Function>) -> Self {
+    fn new(aliases: HashMap<String, ModuleIdentifier>, functions: impl IntoIterator<Item = Function>) -> Self {
         Self {
-            unit,
+            aliases,
             functions: {
                 let mut map = HashMap::new();
                 for function in functions.into_iter() {
@@ -393,7 +419,19 @@ impl Environment<'_> {
     }
 
     fn find_included_module(&self, name: &str) -> Option<&Module> {
-        self.world.modules.get(self.current_module().unit.aliases.get(name)?)
+        if name.starts_with('$') {
+            println!("Looking up stdlib module: {}", name);
+            let module = self.world.stdlib.get_module(name);
+            if let Some(m) = module {
+                for f in m.functions.keys() {
+                    println!("  - {}", f);
+                }
+            }
+
+            module
+        } else {
+            self.world.modules.get(self.current_module().aliases.get(name)?)
+        }
     }
 }
 
@@ -594,6 +632,50 @@ impl ConstantPool {
         let mut constants: Vec<_> = self.constants.iter().collect();
         constants.sort_by_key(|(_, offset)| *offset);
         constants.into_iter().map(|(value, _)| value.clone()).collect()
+    }
+}
+
+struct Stdlib {
+    modules: HashMap<String, Module>,
+}
+
+impl Stdlib {
+    fn create(label_generator: &mut LabelGenerator) -> Self {
+        let mut modules = HashMap::new();
+        let parser = ProgramFragmentParser::new();
+        for (module_name, source) in STD_LIB_SOURCES.iter() {
+            let fragment = parser
+                .parse(source)
+                .expect(&format!("Failed to parse standard library source '{}'", module_name));
+
+            let mut functions = Vec::new();
+            for directive in fragment.directives.into_iter() {
+                match directive {
+                    Directive::Subroutine { name, parameters, body } => {
+                        let label = label_generator.generate('L');
+                        let header = Header::create(label_generator.generate('M'), &parameters);
+                        functions.push(Function {
+                            name: name.clone(),
+                            source: SourceReference::Labelled(format!("{}::{}", module_name, name)),
+                            entry_point: label.clone(),
+                            body: body.clone(),
+                            kind: FunctionKind::Subroutine,
+                            header,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+
+            let module = Module::new(HashMap::new(), functions);
+            modules.insert(module_name.to_string(), module);
+        }
+
+        Self { modules }
+    }
+
+    fn get_module(&self, name: &str) -> Option<&Module> {
+        self.modules.get(name)
     }
 }
 

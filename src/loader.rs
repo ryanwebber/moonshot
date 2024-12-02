@@ -5,6 +5,12 @@ use crate::ast::{Directive, ProgramFragment};
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ModuleIdentifier(String);
 
+impl ModuleIdentifier {
+    pub fn from(s: impl Into<String>) -> Self {
+        Self(s.into())
+    }
+}
+
 pub struct Program {
     pub compilation_units: HashMap<ModuleIdentifier, CompilationUnit>,
 }
