@@ -9,31 +9,33 @@ use regex::Regex;
 
 mod cases;
 
-pub trait TestCase {
-    const NAME: &'static str;
-    const SOURCE: &'static str;
+pub struct TestCase {
+    pub name: &'static str,
+    pub source: &'static str,
+}
 
-    fn finish(_asserval: i16) {
-        // Noop
+impl TestCase {
+    pub fn run(&self, f: impl FnOnce(i16)) {
+        run_test(self, f);
     }
 }
 
-pub fn run_test<T: TestCase>() {
+fn run_test(test_case: &TestCase, f: impl FnOnce(i16)) {
     if std::env::var("MOONSHOT_RUN_INTEGRATION_TESTS").is_err() {
-        println!("Skipping AGC tests: {}", T::NAME);
+        println!("Skipping AGC tests: {}", test_case.name);
         return;
     }
 
-    let ast = parser::parse(T::SOURCE).expect("Failed to parse source");
-    let program = Program::new_with_source(SourceReference::Labelled(String::from(T::NAME)), ast);
+    let ast = parser::parse(&test_case.source).expect("Failed to parse source");
+    let program = Program::new_with_source(SourceReference::Labelled(String::from(test_case.name)), ast);
 
     let output = Compiler::new().compile(program).expect("Compilation failed");
     let assembly = output.to_yul_assembly();
 
     // Write the assembly to a  file so we can call yaAGC on it
     let tmp_dir = std::env::temp_dir();
-    let test_asm_file_path = PathBuf::from(format!("{}.asm", T::NAME));
-    let test_bin_file_path = PathBuf::from(format!("{}.asm.bin", T::NAME));
+    let test_asm_file_path = PathBuf::from(format!("{}.asm", test_case.name));
+    let test_bin_file_path = PathBuf::from(format!("{}.asm.bin", test_case.name));
 
     println!("Temp dir: {:?}", tmp_dir);
     println!("Assembly path: {:?}", test_asm_file_path);
@@ -89,7 +91,7 @@ pub fn run_test<T: TestCase>() {
 
         // Parse the assertion value as an octal number
         let value: i16 = i16::from_str_radix(captures.as_str(), 8).expect("Failed to parse assertion value");
-        T::finish(value);
+        f(value);
     }
 }
 

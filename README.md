@@ -3,6 +3,15 @@
 A language and compiler toolchain targeting the Apollo Guidance Computer. This is a hobby
 project started to learn more about the AGC architecture and software.
 
+## Current Status
+
+ * Working: Basic langage parsing, compilation, and code generation
+ * Working: Basic function calls working
+ * Working: Basic integration tests with `yaAGC`
+ * Missing: Most program validation
+ * Missing: Most standard library functions
+ * Missing: Runtime support for states and program dispatch
+
 ## Example
 
 ```
@@ -49,12 +58,6 @@ sub calculate_next (current: i15) -> i15 {
     return current + 1;
 }
 
-sub inline_asm() {
-    @asm {
-        MYLABEL   TC  MYLABEL
-    }
-}
-
 ```
 
 ## Getting Started
@@ -75,19 +78,15 @@ A Dockerfile is provided that will bootstrap a container with the following tool
  * The `yaYUL` assembler
  * The `yaAGC` AGC emulator
 
-With docker installed, you can enter this environment with the following sequence of commands:
+With podman (or docker) installed, you can run a suite of integration tests that compile
+moonshot programs, assemble them with `yaYUL`, and run them on `yaAGC`:
 
 ```bash
-# Create the docker container
-docker build -t moonshot-agc .
+# Build the container and run the integration tests
+podman build -t moonshot/test -f Dockerfile
 
-# Drop a shell into the container
-docker run --rm -it --entrypoint sh moonshot-agc
-
-# Compile, assemble, and execute a program
-moonshot > main.agc
-yaYUL main.agc
-yaAGC main.agc.bin
+# Drop into a shell in the container
+podman run -ti moonshot/test /bin/sh
 ```
 
 ## Helpful Links

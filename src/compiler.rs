@@ -42,8 +42,8 @@ impl State {
     }
 
     pub fn compile(mut self, program: Program) -> anyhow::Result<Output> {
+        let mut world = World::new();
         let mut label_generator = LabelGenerator::new();
-        let mut world = World::create(&mut label_generator);
 
         // Emit some data slots for stdlib stuff
         self.generator.data_mut().enqueue_comment("DSKY REGISTERS AND FLAGS");
@@ -350,9 +350,9 @@ struct World {
 }
 
 impl World {
-    fn create(label_generator: &mut LabelGenerator) -> Self {
+    fn new() -> Self {
         Self {
-            stdlib: Stdlib::create(label_generator),
+            stdlib: Stdlib::new(),
             modules: HashMap::new(),
         }
     }
@@ -640,7 +640,10 @@ struct Stdlib {
 }
 
 impl Stdlib {
-    fn create(label_generator: &mut LabelGenerator) -> Self {
+    fn new() -> Self {
+        // HACK: we're creating a label generator here which we shouldn't do
+        // but we're going to use different prefixes so it should be fine
+        let mut label_generator = LabelGenerator::new();
         let mut modules = HashMap::new();
         let parser = ProgramFragmentParser::new();
         for (module_name, source) in STD_LIB_SOURCES.iter() {
@@ -652,8 +655,8 @@ impl Stdlib {
             for directive in fragment.directives.into_iter() {
                 match directive {
                     Directive::Subroutine { name, parameters, body } => {
-                        let label = label_generator.generate('L');
-                        let header = Header::create(label_generator.generate('M'), &parameters);
+                        let label = label_generator.generate('X');
+                        let header = Header::create(label_generator.generate('Z'), &parameters);
                         functions.push(Function {
                             name: name.clone(),
                             source: SourceReference::Labelled(format!("{}::{}", module_name, name)),
