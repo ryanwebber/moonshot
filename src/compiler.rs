@@ -76,10 +76,16 @@ impl State {
                             entry_point: label.clone(),
                             body: body.clone(),
                             kind: FunctionKind::State,
+                            return_type: None,
                             header,
                         });
                     }
-                    Directive::Subroutine { name, parameters, body } => {
+                    Directive::Subroutine {
+                        name,
+                        parameters,
+                        return_type,
+                        body,
+                    } => {
                         let label = label_generator.generate('F');
                         let header = Header::create(label_generator.generate('W'), &parameters);
                         functions.push(Function {
@@ -88,6 +94,11 @@ impl State {
                             entry_point: label.clone(),
                             body: body.clone(),
                             kind: FunctionKind::Subroutine,
+                            return_type: if let Some(return_type) = return_type {
+                                Some(Type::try_from(return_type.as_str())?)
+                            } else {
+                                None
+                            },
                             header,
                         });
                     }
@@ -225,6 +236,13 @@ impl State {
                 }
                 Statement::Return(expression) => {
                     if let Some(expression) = expression {
+                        anyhow::ensure!(
+                            function.return_type.is_some(),
+                            "Function '{}' should not return a value, but got: {}",
+                            function.name,
+                            expression.brief()
+                        );
+
                         self.generator
                             .code_mut()
                             .enqueue_comment(format!("RETURN {}", expression.brief()));
@@ -235,6 +253,12 @@ impl State {
                         } else {
                             anyhow::bail!("Return expression does not produce a value: {}", expression.brief());
                         }
+                    } else {
+                        anyhow::ensure!(
+                            function.return_type.is_none(),
+                            "Function '{}' should return a value, but got empty return expression",
+                            function.name,
+                        );
                     }
 
                     // Put the return value back in the Q register and return
@@ -442,6 +466,7 @@ struct Function {
     source: SourceReference,
     kind: FunctionKind,
     entry_point: Label,
+    return_type: Option<Type>,
     header: Header,
     body: Block,
 }
@@ -655,7 +680,12 @@ impl Stdlib {
             let mut functions = Vec::new();
             for directive in fragment.directives.into_iter() {
                 match directive {
-                    Directive::Subroutine { name, parameters, body } => {
+                    Directive::Subroutine {
+                        name,
+                        parameters,
+                        return_type,
+                        body,
+                    } => {
                         let label = label_generator.generate('X');
                         let header = Header::create(label_generator.generate('Z'), &parameters);
                         functions.push(Function {
@@ -664,6 +694,8 @@ impl Stdlib {
                             entry_point: label.clone(),
                             body: body.clone(),
                             kind: FunctionKind::Subroutine,
+                            return_type: return_type
+                                .map(|t| Type::try_from(t.as_str()).expect(&format!("Unknown type: '{}'", t))),
                             header,
                         });
                     }
@@ -680,6 +712,22 @@ impl Stdlib {
 
     fn get_module(&self, name: &str) -> Option<&Module> {
         self.modules.get(name)
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Type {
+    Word,
+}
+
+impl TryFrom<&str> for Type {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &str) -> anyhow::Result<Self> {
+        match value {
+            "WORD" => Ok(Self::Word),
+            _ => anyhow::bail!("Unknown type: {}", value),
+        }
     }
 }
 

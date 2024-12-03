@@ -4,7 +4,7 @@ const TEST_CASE: TestCase = TestCase {
     name: file!(),
     source: indoc::indoc! {r#"
         state main () [] {
-            let a: i15 = 1234;
+            let a: WORD = 1234;
             $tests::exit_with(value: a + 1);
         }
     "#},

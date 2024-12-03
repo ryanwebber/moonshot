@@ -31,9 +31,10 @@ pub Directive: ast::Directive = {
         values,
         body,
     },
-    "sub" <name:Identifier> "(" <parameters:ParameterList> ")" <body:Block> => ast::Directive::Subroutine {
+    "sub" <name:Identifier> "(" <parameters:ParameterList> ")" <return_type:("->" <Identifier>)?> <body:Block> => ast::Directive::Subroutine {
         name,
         parameters,
+        return_type,
         body,
     },
 }
@@ -100,6 +101,7 @@ pub Expression: ast::Expression = {
         function: f,
         arguments: args,
     },
+    "(" <Expression> ")" => <>,
     #[precedence(level="1")] #[assoc(side="left")]
     <lhs:Expression> "+" <rhs:Expression> => ast::Expression::BinaryOperation {
         lhs: Box::new(lhs),
@@ -151,7 +153,6 @@ CommaSeparated<T>: Vec<T> = {
 
 match {
     "+",
-    "-",
     "*",
     ";",
     ",",
@@ -165,6 +166,7 @@ match {
     "=",
     "\"",
     "::",
+    "->",
     "as",
     "let",
     "goto",
@@ -180,6 +182,7 @@ match {
     r#""[^"]*""# => StringLiteral,
 } else {
     ":",
+    "-",
     r"\.(\w|[0-9])*" => SpecifierLiteral,
     r"(\$|\w)(\w|[0-9])*" => IdentifierLiteral,
 } else {

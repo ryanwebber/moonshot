@@ -7,7 +7,7 @@ const TEST_CASE: TestCase = TestCase {
             $tests::exit_with(value: test());
         }
 
-        sub test() {
+        sub test() -> WORD {
             return 5678;
         }
     "#},

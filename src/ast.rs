@@ -23,6 +23,7 @@ pub enum Directive {
     Subroutine {
         name: String,
         parameters: Vec<ValueDeclaration>,
+        return_type: Option<String>,
         body: Block,
     },
 }
