@@ -132,6 +132,7 @@ impl State {
             .enqueue_comment("SYSMAIN ENTRY POINT")
             .enqueue_line_break();
 
+        // TODO: Instead of this, let's jump into some runtime code
         let main_function = world.modules.iter().find_map(|(_, module)| module.find_function("main"));
         self.generator.code_mut().append(if let Some(main) = main_function {
             Instruction::TC(Address::Relative {

@@ -1,17 +1,18 @@
 use crate::TestCase;
 
 const TEST_CASE: TestCase = TestCase {
-    name: "test_01_harness_validation",
+    name: file!(),
     source: indoc::indoc! {r#"
         state main () [] {
-            $tests::exit_with(value: 1234);
+            let a: i15 = 1234;
+            $tests::exit_with(value: a + 1);
         }
     "#},
 };
 
 #[test]
 fn test() {
-    TEST_CASE.run(|result| {
-        assert_eq!(result, 1234);
+    TEST_CASE.run(|result: i16| {
+        assert_eq!(result, 1235);
     });
 }

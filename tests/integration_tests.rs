@@ -26,16 +26,27 @@ fn run_test(test_case: &TestCase, f: impl FnOnce(i16)) {
         return;
     }
 
+    let test_slug: String = if test_case.name.ends_with(".rs") {
+        let path = PathBuf::from(test_case.name);
+        path.file_stem()
+            .expect("Failed to get file stem")
+            .to_str()
+            .expect("Failed to convert OsStr to str")
+            .to_string()
+    } else {
+        test_case.name.to_string()
+    };
+
     let ast = parser::parse(&test_case.source).expect("Failed to parse source");
-    let program = Program::new_with_source(SourceReference::Labelled(String::from(test_case.name)), ast);
+    let program = Program::new_with_source(SourceReference::Labelled(test_slug.clone()), ast);
 
     let output = Compiler::new().compile(program).expect("Compilation failed");
     let assembly = output.to_yul_assembly();
 
     // Write the assembly to a  file so we can call yaAGC on it
     let tmp_dir = std::env::temp_dir();
-    let test_asm_file_path = PathBuf::from(format!("{}.asm", test_case.name));
-    let test_bin_file_path = PathBuf::from(format!("{}.asm.bin", test_case.name));
+    let test_asm_file_path = PathBuf::from(format!("{}.asm", test_slug));
+    let test_bin_file_path = PathBuf::from(format!("{}.asm.bin", test_slug));
 
     println!("Temp dir: {:?}", tmp_dir);
     println!("Assembly path: {:?}", test_asm_file_path);

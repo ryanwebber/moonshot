@@ -23,7 +23,8 @@ COPY --from=toolchain /tmp/virtualagc-20221005/yaYUL/yaYUL /usr/local/bin
 
 WORKDIR /tmp
 
-COPY Cargo.toml Cargo.lock build.rs moonshot/
+COPY Cargo.toml Cargo.lock moonshot/
+COPY build.rs moonshot/
 COPY src moonshot/src/
 COPY tests moonshot/tests/
 COPY examples moonshot/examples/
