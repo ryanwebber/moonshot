@@ -5,12 +5,14 @@ project started to learn more about the AGC architecture and software.
 
 ## Current Status
 
- * Working: Basic langage parsing, compilation, and code generation
- * Working: Basic function calls working
- * Working: Basic integration tests with `yaAGC`
- * Missing: Most program validation
- * Missing: Most standard library functions
- * Missing: Runtime support for states and program dispatch
+ * ✅ Basic langage parsing, compilation, and code generation
+ * ✅ Basic function calls working
+ * ✅ Basic integration tests with `yaAGC`
+ * ❌ Most program validation
+ * ❌ Type validation between i15s and fixed point values
+ * ❌ Major language features (loops, if statements, binary arithmetic)
+ * ❌ Most standard library functions
+ * ❌ Runtime support for states and program dispatch
 
 ## Example
 
